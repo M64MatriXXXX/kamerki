@@ -30,7 +30,7 @@ class StreamManager extends EventEmitter {
     const auth = camera.username
       ? `${encodeURIComponent(camera.username)}:${encodeURIComponent(camera.password || '')}@`
       : '';
-    const rtspPath = camera.rtsp_path || '/Streaming/Channels/101';
+    const rtspPath = camera.rtsp_path || '';
     return `rtsp://${auth}${camera.ip}:${camera.port || 554}${rtspPath}`;
   }
 
