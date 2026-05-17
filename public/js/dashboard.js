@@ -291,6 +291,12 @@
         </div>
       </div>
       <div class="tile-info">
+        <button class="tile-btn-edit" data-id="${cam.id}" title="Edytuj kamerę">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
         <div class="tile-name" title="${escHtml(cam.name)}">${escHtml(cam.name)}</div>
         <div class="tile-meta">
           ${cam.category !== 'default' ? `<span class="chip">${escHtml(cam.category)}</span>` : ''}
@@ -322,8 +328,19 @@
     }
 
     tile.addEventListener('click', e => {
+      const editBtn = e.target.closest('.tile-btn-edit');
       const playBtn = e.target.closest('.tile-btn-play');
       const ptzBtn  = e.target.closest('.tile-btn-ptz');
+      if (editBtn) {
+        e.stopPropagation();
+        NVR.api.get(`/api/cameras/${cam.id}`).then(full => {
+          NVR.cameraModal.open(full, async () => {
+            await NVR.loadCameras();
+            renderCategoryBar();
+            renderGrid();
+          });
+        }).catch(err => NVR.toast('error', 'Błąd', err.message));
+      }
       if (playBtn) { e.stopPropagation(); openStreamModal(parseInt(playBtn.dataset.id)); }
       if (ptzBtn)  { e.stopPropagation(); openStreamModal(parseInt(ptzBtn.dataset.id), true); }
     });

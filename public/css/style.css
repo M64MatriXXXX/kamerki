@@ -414,6 +414,22 @@ body.sidebar-collapsed .main-content { margin-left: 0; }
 .badge-starting  { background: rgba(210,153,34,.12); color: var(--warning); }
 .badge-disabled  { background: rgba(139,148,158,.1); color: var(--text-dim); }
 
+.tile-btn-edit {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.tile-btn-edit svg { width: 13px; height: 13px; }
+.tile-btn-edit:hover { border-color: var(--text-muted); color: var(--text); background: var(--bg); }
+
 .tile-btn-play, .tile-btn-ptz {
   background: none;
   border: 1px solid var(--border);
