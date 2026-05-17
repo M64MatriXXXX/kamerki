@@ -318,8 +318,13 @@ const PAGE_TITLES = {
 function navigateTo(page) {
   if (!PAGE_TITLES[page]) page = 'dashboard';
 
-  // Update nav
+  // Update desktop nav
   document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.page === page);
+  });
+
+  // Update bottom nav
+  document.querySelectorAll('.bottom-nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === page);
   });
 
@@ -331,6 +336,9 @@ function navigateTo(page) {
   document.getElementById('pageTitle').textContent = PAGE_TITLES[page];
 
   NVR.currentPage = page;
+
+  // Close sidebar on mobile after navigation
+  document.body.classList.remove('sidebar-open');
 
   // Init page if needed
   const initFn = NVR.pages[page];
@@ -346,18 +354,34 @@ function navigateTo(page) {
    App init
    ============================================================ */
 async function initApp() {
-  // Sidebar toggle
+  // Desktop sidebar toggle
   document.getElementById('sidebarToggle').addEventListener('click', () => {
     document.body.classList.toggle('sidebar-collapsed');
   });
 
-  // Nav links
+  // Sidebar backdrop (mobile) — click to close
+  document.getElementById('sidebarBackdrop').addEventListener('click', () => {
+    document.body.classList.remove('sidebar-open');
+  });
+
+  // Desktop nav links
   document.querySelectorAll('.nav-item').forEach(el => {
     el.addEventListener('click', e => {
       e.preventDefault();
       navigateTo(el.dataset.page);
     });
   });
+
+  // Bottom nav links (mobile)
+  document.querySelectorAll('.bottom-nav-item').forEach(el => {
+    el.addEventListener('click', e => {
+      e.preventDefault();
+      navigateTo(el.dataset.page);
+    });
+  });
+
+  // Mobile swipe-right-from-edge to open sidebar
+  initSwipeGestures();
 
   // Load initial data
   await NVR.loadCameras();
@@ -368,6 +392,37 @@ async function initApp() {
   // Navigate to current hash or default
   const hash = location.hash.replace('#', '') || 'dashboard';
   navigateTo(hash);
+}
+
+/* ============================================================
+   Swipe gestures (mobile sidebar)
+   ============================================================ */
+function initSwipeGestures() {
+  let touchStartX = 0;
+  let touchStartY = 0;
+
+  document.addEventListener('touchstart', e => {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+
+  document.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+
+    // Only horizontal swipes (more horizontal than vertical)
+    if (Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    if (Math.abs(dx) < 50) return;
+
+    // Swipe right from left edge → open sidebar
+    if (dx > 0 && touchStartX < 30) {
+      document.body.classList.add('sidebar-open');
+    }
+    // Swipe left → close sidebar
+    if (dx < 0 && document.body.classList.contains('sidebar-open')) {
+      document.body.classList.remove('sidebar-open');
+    }
+  }, { passive: true });
 }
 
 /* ============================================================

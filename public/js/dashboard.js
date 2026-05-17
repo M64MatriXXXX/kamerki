@@ -375,23 +375,33 @@
     const cam = NVR.cameras.find(c => c.id === cameraId);
     if (!cam) return;
 
-    document.getElementById('streamModalOverlay') && closeStreamModal();
+    if (document.getElementById('streamModalOverlay')) closeStreamModal();
 
     const overlay = document.createElement('div');
     overlay.className = 'stream-modal-overlay';
     overlay.id = 'streamModalOverlay';
 
     const hasPtz = cam.brand === 'hikvision' || cam.brand === 'dahua';
+    const isMobile = window.innerWidth <= 768;
 
     overlay.innerHTML = `
       <div class="stream-modal">
         <div class="stream-modal-header">
-          <div style="display:flex;align-items:center;gap:10px">
-            <span style="font-weight:700;font-size:15px">${escHtml(cam.name)}</span>
-            <span class="chip">${escHtml(cam.brand)}</span>
-            ${cam.category !== 'default' ? `<span class="chip">${escHtml(cam.category)}</span>` : ''}
+          <div style="display:flex;align-items:center;gap:8px;min-width:0">
+            <span style="font-weight:700;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(cam.name)}</span>
+            <span class="chip" style="flex-shrink:0">${escHtml(cam.brand)}</span>
           </div>
-          <button class="modal-close" id="streamModalClose">&times;</button>
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+            ${hasPtz && isMobile ? `
+              <button class="btn btn-sm btn-secondary" id="streamPtzToggle" title="Sterowanie PTZ">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M12 1v4M12 19v4M1 12h4M19 12h4"/>
+                </svg>
+                PTZ
+              </button>` : ''}
+            <button class="modal-close" id="streamModalClose">&times;</button>
+          </div>
         </div>
         <div class="stream-modal-body">
           <div class="stream-video-area">
@@ -400,7 +410,7 @@
               <div class="spinner"></div><span>Łączenie...</span>
             </div>
           </div>
-          ${hasPtz ? `<div class="stream-side-panel" id="streamSidePanel"></div>` : ''}
+          ${hasPtz ? `<div class="stream-side-panel${isMobile && !showPtz ? ' hidden' : ''}" id="streamSidePanel"></div>` : ''}
         </div>
       </div>`;
 
@@ -410,6 +420,18 @@
     const video   = overlay.querySelector('#streamModalVideo');
     const innerOv = overlay.querySelector('#streamModalOverlayInner');
     let modalHls  = null;
+
+    // PTZ toggle button (mobile)
+    const ptzToggleBtn = overlay.querySelector('#streamPtzToggle');
+    if (ptzToggleBtn) {
+      ptzToggleBtn.addEventListener('click', () => {
+        const panel = overlay.querySelector('#streamSidePanel');
+        if (!panel) return;
+        const hidden = panel.classList.toggle('hidden');
+        ptzToggleBtn.classList.toggle('btn-primary', !hidden);
+        ptzToggleBtn.classList.toggle('btn-secondary', hidden);
+      });
+    }
 
     function handleReady(id) {
       if (id !== cameraId) return;
@@ -434,6 +456,9 @@
       if (sidePanel) NVR.ptzControl.render(sidePanel, cam);
     }
 
+    // Swipe down to close (mobile)
+    initSwipeDownClose(overlay.querySelector('.stream-modal'), closeStreamModal);
+
     overlay._cleanup = function () {
       NVR.socket.emit('unwatch_camera', cameraId);
       [NVR._streamReadyListeners, NVR._streamErrorListeners].forEach(arr => {
@@ -444,6 +469,20 @@
 
     overlay.querySelector('#streamModalClose').addEventListener('click', closeStreamModal);
     overlay.addEventListener('click', e => { if (e.target === overlay) closeStreamModal(); });
+  }
+
+  /* Swipe down on modal header to close */
+  function initSwipeDownClose(modalEl, closeFn) {
+    if (!modalEl) return;
+    const header = modalEl.querySelector('.stream-modal-header');
+    if (!header) return;
+
+    let startY = 0;
+    header.addEventListener('touchstart', e => { startY = e.touches[0].clientY; }, { passive: true });
+    header.addEventListener('touchend', e => {
+      const dy = e.changedTouches[0].clientY - startY;
+      if (dy > 60) closeFn();
+    }, { passive: true });
   }
 
   function closeStreamModal() {
