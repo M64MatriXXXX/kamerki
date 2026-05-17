@@ -1,6 +1,85 @@
 'use strict';
 
 const axios = require('axios');
+const crypto = require('crypto');
+
+/* ----------------------------------------------------------
+   Digest Auth helper (required by modern Dahua firmware 2.x+)
+---------------------------------------------------------- */
+async function digestRequest(method, url, username, password, params = {}) {
+  // Step 1: probe to get WWW-Authenticate challenge
+  let challenge;
+  try {
+    await axios({ method, url, params, timeout: 5000, validateStatus: () => true });
+  } catch (_) {}
+
+  try {
+    const probe = await axios({
+      method, url, params, timeout: 5000,
+      validateStatus: s => true
+    });
+
+    if (probe.status !== 401) {
+      // Camera accepted without auth (or Basic auth works)
+      return probe;
+    }
+    challenge = probe.headers['www-authenticate'] || '';
+  } catch (err) {
+    throw new Error(`PTZ connection failed: ${err.message}`);
+  }
+
+  if (!challenge.toLowerCase().includes('digest')) {
+    // Fall back to Basic auth
+    return axios({ method, url, params, timeout: 5000,
+      auth: { username, password } });
+  }
+
+  // Step 2: parse Digest challenge
+  const get = (key) => {
+    const m = challenge.match(new RegExp(`${key}="([^"]+)"`));
+    return m ? m[1] : '';
+  };
+  const realm  = get('realm');
+  const nonce  = get('nonce');
+  const opaque = get('opaque');
+  const qop    = (challenge.match(/qop="?([^",\s]+)"?/) || [])[1] || '';
+
+  const parsedUrl = new URL(url);
+  const uri = parsedUrl.pathname + (parsedUrl.search || '');
+
+  const ha1 = crypto.createHash('md5').update(`${username}:${realm}:${password}`).digest('hex');
+  const ha2 = crypto.createHash('md5').update(`${method}:${uri}`).digest('hex');
+
+  const nc     = '00000001';
+  const cnonce = crypto.randomBytes(8).toString('hex');
+
+  let responseHash;
+  if (qop === 'auth' || qop === 'auth-int') {
+    responseHash = crypto.createHash('md5')
+      .update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+  } else {
+    responseHash = crypto.createHash('md5')
+      .update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+  }
+
+  const authHeader = [
+    `Digest username="${username}"`,
+    `realm="${realm}"`,
+    `nonce="${nonce}"`,
+    `uri="${uri}"`,
+    qop ? `qop=${qop}` : null,
+    qop ? `nc=${nc}` : null,
+    qop ? `cnonce="${cnonce}"` : null,
+    `response="${responseHash}"`,
+    opaque ? `opaque="${opaque}"` : null
+  ].filter(Boolean).join(', ');
+
+  return axios({
+    method, url, params, timeout: 5000,
+    headers: { Authorization: authHeader },
+    validateStatus: s => s >= 200 && s < 400
+  });
+}
 
 // Hikvision direction -> [pan, tilt] speed multipliers
 const HIKVISION_DIRECTIONS = {
@@ -94,69 +173,43 @@ async function dahuaMove(camera, direction, speed = 5) {
   const code = DAHUA_DIRECTIONS[direction];
   if (!code) throw new Error(`Unknown direction: ${direction}`);
 
-  const baseUrl = `http://${camera.ip}:${camera.http_port || 80}/cgi-bin/ptz.cgi`;
-  const params = new URLSearchParams({
-    action: 'start',
-    channel: '0',
-    code,
-    arg1: '0',
-    arg2: String(speed),
-    arg3: '0'
-  });
+  const url = `http://${camera.ip}:${camera.http_port || 80}/cgi-bin/ptz.cgi`;
+  const user = camera.username || 'admin';
+  const pass = camera.password || '';
 
-  await axios.get(`${baseUrl}?${params}`, {
-    auth: { username: camera.username || 'admin', password: camera.password || '' },
-    timeout: 5000
+  await digestRequest('GET', url, user, pass, {
+    action: 'start', channel: '1', code, arg1: '0', arg2: String(speed), arg3: '0'
   });
 }
 
 async function dahuaStop(camera, direction) {
   const code = direction ? (DAHUA_DIRECTIONS[direction] || 'Up') : 'Up';
-  const baseUrl = `http://${camera.ip}:${camera.http_port || 80}/cgi-bin/ptz.cgi`;
-  const params = new URLSearchParams({
-    action: 'stop',
-    channel: '0',
-    code,
-    arg1: '0',
-    arg2: '0',
-    arg3: '0'
-  });
+  const url  = `http://${camera.ip}:${camera.http_port || 80}/cgi-bin/ptz.cgi`;
+  const user = camera.username || 'admin';
+  const pass = camera.password || '';
 
-  await axios.get(`${baseUrl}?${params}`, {
-    auth: { username: camera.username || 'admin', password: camera.password || '' },
-    timeout: 5000
+  await digestRequest('GET', url, user, pass, {
+    action: 'stop', channel: '1', code, arg1: '0', arg2: '0', arg3: '0'
   });
 }
 
 async function dahuaGotoPreset(camera, presetNumber) {
-  const baseUrl = `http://${camera.ip}:${camera.http_port || 80}/cgi-bin/ptz.cgi`;
-  const params = new URLSearchParams({
-    action: 'goto',
-    channel: '0',
-    code: 'GotoPreset',
-    arg1: '0',
-    arg2: String(presetNumber),
-    arg3: '0'
-  });
-  await axios.get(`${baseUrl}?${params}`, {
-    auth: { username: camera.username || 'admin', password: camera.password || '' },
-    timeout: 5000
+  const url  = `http://${camera.ip}:${camera.http_port || 80}/cgi-bin/ptz.cgi`;
+  const user = camera.username || 'admin';
+  const pass = camera.password || '';
+
+  await digestRequest('GET', url, user, pass, {
+    action: 'goto', channel: '1', code: 'GotoPreset', arg1: '0', arg2: String(presetNumber), arg3: '0'
   });
 }
 
 async function dahuaSavePreset(camera, presetNumber) {
-  const baseUrl = `http://${camera.ip}:${camera.http_port || 80}/cgi-bin/ptz.cgi`;
-  const params = new URLSearchParams({
-    action: 'set',
-    channel: '0',
-    code: 'SetPreset',
-    arg1: '0',
-    arg2: String(presetNumber),
-    arg3: '0'
-  });
-  await axios.get(`${baseUrl}?${params}`, {
-    auth: { username: camera.username || 'admin', password: camera.password || '' },
-    timeout: 5000
+  const url  = `http://${camera.ip}:${camera.http_port || 80}/cgi-bin/ptz.cgi`;
+  const user = camera.username || 'admin';
+  const pass = camera.password || '';
+
+  await digestRequest('GET', url, user, pass, {
+    action: 'set', channel: '1', code: 'SetPreset', arg1: '0', arg2: String(presetNumber), arg3: '0'
   });
 }
 
