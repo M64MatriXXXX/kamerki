@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NVR Pro — Network Video Recorder</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- App CSS -->
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M3 9l4-4 5 2 5-2 4 4v6l-4 4-5-2-5 2-4-4V9z"/>
+      </svg>
+      <span class="logo-text">NVR Pro</span>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a href="#dashboard" class="nav-item active" data-page="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+          <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+        </svg>
+        <span>Dashboard</span>
+      </a>
+      <a href="#cameras" class="nav-item" data-page="cameras">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+        </svg>
+        <span>Cameras</span>
+      </a>
+      <a href="#map" class="nav-item" data-page="map">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/>
+          <line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>
+        </svg>
+        <span>Map</span>
+      </a>
+      <a href="#settings" class="nav-item" data-page="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        <span>Settings</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="connection-status" id="connectionStatus">
+        <span class="status-dot offline"></span>
+        <span class="status-text">Connecting...</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main-content" id="mainContent">
+    <!-- Top bar -->
+    <header class="topbar">
+      <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <h1 class="page-title" id="pageTitle">Dashboard</h1>
+      <div class="topbar-actions" id="topbarActions"></div>
+    </header>
+
+    <!-- Page containers -->
+    <div class="page active" id="page-dashboard"></div>
+    <div class="page" id="page-cameras"></div>
+    <div class="page" id="page-map"></div>
+    <div class="page" id="page-settings"></div>
+  </main>
+
+  <!-- Camera Modal -->
+  <div class="modal-overlay" id="cameraModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="modalTitle">Add Camera</h2>
+        <button class="modal-close" id="modalClose" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="cameraForm" novalidate>
+          <input type="hidden" id="cameraId" />
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="fName">Camera Name *</label>
+              <input type="text" id="fName" required placeholder="e.g. Front Door" />
+            </div>
+            <div class="form-group">
+              <label for="fCategory">Category</label>
+              <input type="text" id="fCategory" placeholder="e.g. entrance" list="categoryList" />
+              <datalist id="categoryList"></datalist>
+            </div>
+            <div class="form-group">
+              <label for="fIp">IP Address *</label>
+              <input type="text" id="fIp" required placeholder="192.168.1.100" />
+            </div>
+            <div class="form-group">
+              <label for="fPort">RTSP Port</label>
+              <input type="number" id="fPort" value="554" min="1" max="65535" />
+            </div>
+            <div class="form-group">
+              <label for="fUsername">Username</label>
+              <input type="text" id="fUsername" placeholder="admin" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label for="fPassword">Password</label>
+              <input type="password" id="fPassword" placeholder="password" autocomplete="off" />
+            </div>
+            <div class="form-group full-width">
+              <label for="fRtspPath">RTSP Path</label>
+              <input type="text" id="fRtspPath" value="/Streaming/Channels/101" placeholder="/Streaming/Channels/101" />
+            </div>
+            <div class="form-group">
+              <label for="fBrand">Brand</label>
+              <select id="fBrand">
+                <option value="hikvision">Hikvision</option>
+                <option value="dahua">Dahua</option>
+                <option value="generic" selected>Generic</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="fEnabled">Status</label>
+              <select id="fEnabled">
+                <option value="1">Enabled</option>
+                <option value="0">Disabled</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="fLat">Latitude</label>
+              <input type="number" id="fLat" step="0.000001" placeholder="53.8278" />
+            </div>
+            <div class="form-group">
+              <label for="fLng">Longitude</label>
+              <input type="number" id="fLng" step="0.000001" placeholder="22.3729" />
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="modalCancel">Cancel</button>
+        <button class="btn btn-primary" id="modalSave">Save Camera</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notifications -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Scripts -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/app.js"></script>
+  <script src="/js/dashboard.js"></script>
+  <script src="/js/cameraList.js"></script>
+  <script src="/js/mapView.js"></script>
+  <script src="/js/ptzControl.js"></script>
+</body>
+</html>
