@@ -3,9 +3,10 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const EventEmitter = require('events');
 
-const HLS_DIR = process.env.HLS_DIR || '/tmp/nvr-streams';
+const HLS_DIR = process.env.HLS_DIR || path.join(os.tmpdir(), 'nvr-streams');
 const VIEWER_TIMEOUT_MS = parseInt(process.env.VIEWER_TIMEOUT || '30000', 10);
 
 class StreamManager extends EventEmitter {
@@ -30,7 +31,8 @@ class StreamManager extends EventEmitter {
     const auth = camera.username
       ? `${encodeURIComponent(camera.username)}:${encodeURIComponent(camera.password || '')}@`
       : '';
-    const rtspPath = camera.rtsp_path || '';
+    const rawPath = (camera.rtsp_path || '').trim();
+    const rtspPath = (rawPath === '/' || rawPath === '') ? '' : rawPath;
     return `rtsp://${auth}${camera.ip}:${camera.port || 554}${rtspPath}`;
   }
 
@@ -60,6 +62,9 @@ class StreamManager extends EventEmitter {
           }
         });
       } catch (_) {}
+
+      console.log(`[FFmpeg] Camera ${cameraId} → ${rtspUrl.replace(/:([^@]+)@/, ':***@')}`);
+      console.log(`[FFmpeg] HLS output → ${hlsPath}`);
 
       const ffmpegArgs = [
         '-rtsp_transport', 'tcp',

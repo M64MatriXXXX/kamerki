@@ -7,12 +7,13 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const streamManager = require('./src/streamManager');
 const db = require('./src/database');
 
 const PORT = process.env.PORT || 3000;
-const HLS_DIR = process.env.HLS_DIR || '/tmp/nvr-streams';
+const HLS_DIR = process.env.HLS_DIR || path.join(os.tmpdir(), 'nvr-streams');
 
 const app = express();
 const server = http.createServer(app);
