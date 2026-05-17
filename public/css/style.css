@@ -417,18 +417,19 @@ body.sidebar-collapsed .main-content { margin-left: 0; }
 .tile-btn-edit {
   background: none;
   border: 1px solid var(--border);
-  color: var(--text-dim);
+  color: var(--text-muted);
   cursor: pointer;
-  padding: 4px 6px;
+  padding: 4px 7px;
   border-radius: var(--radius-sm);
   transition: all var(--transition);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  margin-left: 2px;
 }
 .tile-btn-edit svg { width: 13px; height: 13px; }
-.tile-btn-edit:hover { border-color: var(--text-muted); color: var(--text); background: var(--bg); }
+.tile-btn-edit:hover { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,.08); }
 
 .tile-btn-play, .tile-btn-ptz {
   background: none;
