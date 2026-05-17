@@ -415,21 +415,31 @@ body.sidebar-collapsed .main-content { margin-left: 0; }
 .badge-disabled  { background: rgba(139,148,158,.1); color: var(--text-dim); }
 
 .tile-btn-edit {
-  background: none;
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 10;
+  background: var(--card);
   border: 1px solid var(--border);
   color: var(--text-muted);
   cursor: pointer;
-  padding: 4px 7px;
+  width: 26px;
+  height: 26px;
   border-radius: var(--radius-sm);
   transition: all var(--transition);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  margin-left: 2px;
+  opacity: 0;
 }
 .tile-btn-edit svg { width: 13px; height: 13px; }
-.tile-btn-edit:hover { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,.08); }
+.camera-tile:hover .tile-btn-edit { opacity: 1; }
+.tile-btn-edit:hover { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,.12); }
+
+/* Always visible on touch devices */
+@media (hover: none) {
+  .tile-btn-edit { opacity: 1; }
+}
 
 .tile-btn-play, .tile-btn-ptz {
   background: none;
