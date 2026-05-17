@@ -22,15 +22,17 @@ router.post('/', (req, res) => {
     const { name, ip, port, username, password, rtsp_path, brand, category, lat, lng, enabled } = req.body;
     if (!name || !ip) return res.status(400).json({ error: 'name and ip are required' });
 
+    const cat = (category || 'default').trim();
+    db.ensureCategoryExists(cat);
     const camera = db.createCamera({
       name: name.trim(),
       ip: ip.trim(),
       port: parseInt(port) || 554,
       username: username || '',
       password: password || '',
-      rtsp_path: rtsp_path || '/Streaming/Channels/101',
+      rtsp_path: rtsp_path || '',
       brand: brand || 'generic',
-      category: category || 'default',
+      category: cat,
       lat: lat !== undefined && lat !== '' ? parseFloat(lat) : null,
       lng: lng !== undefined && lng !== '' ? parseFloat(lng) : null,
       enabled: enabled !== undefined ? (enabled ? 1 : 0) : 1

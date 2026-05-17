@@ -5,12 +5,12 @@
    ============================================================ */
 (function () {
 
-  let gridCols   = 2;
-  let hlsPlayers = {}; // cameraId -> Hls instance
-  let streamModal = null;
+  let gridCols     = 2;
+  let hlsPlayers   = {};
+  let filterCat    = null; // null = show all
 
   /* ----------------------------------------------------------
-     Topbar — layout selector + add button
+     Topbar
   ---------------------------------------------------------- */
   function renderTopbar() {
     const el = document.getElementById('topbarActions');
@@ -38,10 +38,182 @@
     });
 
     document.getElementById('dashAddCamera').addEventListener('click', () => {
-      NVR.cameraModal.open(null, () => {
+      NVR.cameraModal.open(null, async () => {
+        await NVR.loadCameras();
+        renderCategoryBar();
         renderGrid();
       });
     });
+  }
+
+  /* ----------------------------------------------------------
+     Category Bar
+  ---------------------------------------------------------- */
+  async function renderCategoryBar() {
+    const page = document.getElementById('page-dashboard');
+    let bar = page.querySelector('.category-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'category-bar';
+      page.insertBefore(bar, page.firstChild);
+    }
+
+    let categories = [];
+    try { categories = await NVR.api.get('/api/categories'); } catch (_) {}
+
+    const active = NVR.activeCategory;
+
+    bar.innerHTML = `
+      <div class="cat-bar-inner">
+        <span class="cat-bar-label">Kategorie:</span>
+        <div class="cat-bar-buttons">
+          <button class="cat-btn ${active === null ? 'cat-btn-all-active' : ''}" data-cat="__all__">
+            Wszystkie
+          </button>
+          ${categories.map(cat => `
+            <button class="cat-btn ${active === cat.name ? 'cat-btn-active' : ''}"
+              data-cat="${escHtml(cat.name)}"
+              style="--cat-color:${escHtml(cat.color || '#58a6ff')}">
+              <span class="cat-dot" style="background:${escHtml(cat.color || '#58a6ff')}"></span>
+              ${escHtml(cat.name)}
+              <span class="cat-count">${cat.enabled_count || 0}</span>
+            </button>
+          `).join('')}
+          <button class="cat-btn cat-btn-add" id="catAddBtn" title="Dodaj kategorię">+</button>
+        </div>
+        ${active !== null ? `
+          <button class="cat-deactivate-btn" id="catDeactivateBtn" title="Wyłącz wszystkie streamy">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+            </svg>
+            Wyłącz wszystkie
+          </button>
+        ` : ''}
+      </div>
+    `;
+
+    // All cameras button
+    bar.querySelector('[data-cat="__all__"]').addEventListener('click', async () => {
+      filterCat = null;
+      await NVR.loadCameras();
+      renderCategoryBar();
+      renderGrid();
+    });
+
+    // Category buttons
+    bar.querySelectorAll('[data-cat]:not([data-cat="__all__"])').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const cat = btn.dataset.cat;
+        await activateCategory(cat);
+      });
+    });
+
+    // Deactivate button
+    const deactivateBtn = bar.querySelector('#catDeactivateBtn');
+    if (deactivateBtn) {
+      deactivateBtn.addEventListener('click', async () => {
+        await activateCategory(null);
+      });
+    }
+
+    // Add category button
+    bar.querySelector('#catAddBtn').addEventListener('click', () => openAddCategoryModal());
+  }
+
+  /* ----------------------------------------------------------
+     Activate category
+  ---------------------------------------------------------- */
+  async function activateCategory(categoryName) {
+    try {
+      const result = await NVR.api.post('/api/categories/activate', { category: categoryName });
+      NVR.activeCategory = result.activeCategory;
+      filterCat = result.activeCategory;
+
+      if (categoryName) {
+        NVR.toast('success', 'Kategoria aktywna', `Uruchamianie kamer: ${categoryName}`);
+      } else {
+        NVR.toast('info', 'Tryb na żądanie', 'Wszystkie streamy zatrzymane');
+      }
+
+      await NVR.loadCameras();
+      renderCategoryBar();
+      renderGrid();
+    } catch (err) {
+      NVR.toast('error', 'Błąd', err.message);
+    }
+  }
+
+  /* ----------------------------------------------------------
+     Add Category Modal
+  ---------------------------------------------------------- */
+  function openAddCategoryModal() {
+    const existing = document.getElementById('addCatModal');
+    if (existing) existing.remove();
+
+    const COLORS = ['#58a6ff','#3fb950','#f85149','#d29922','#bc8cff','#ff7b72','#79c0ff','#56d364'];
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay open';
+    modal.id = 'addCatModal';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:380px">
+        <div class="modal-header">
+          <h2>Nowa Kategoria</h2>
+          <button class="modal-close" id="addCatClose">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Nazwa kategorii</label>
+            <input type="text" id="newCatName" placeholder="np. Ulica Słowackiego" autofocus />
+          </div>
+          <div class="form-group" style="margin-top:14px">
+            <label>Kolor</label>
+            <div class="color-picker-row">
+              ${COLORS.map(c => `
+                <button class="color-swatch ${c==='#58a6ff'?'selected':''}" data-color="${c}"
+                  style="background:${c}" title="${c}"></button>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="addCatCancel">Anuluj</button>
+          <button class="btn btn-primary" id="addCatSave">Zapisz</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    let selectedColor = '#58a6ff';
+    modal.querySelectorAll('.color-swatch').forEach(sw => {
+      sw.addEventListener('click', () => {
+        modal.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+        sw.classList.add('selected');
+        selectedColor = sw.dataset.color;
+      });
+    });
+
+    const close = () => modal.remove();
+    modal.querySelector('#addCatClose').addEventListener('click', close);
+    modal.querySelector('#addCatCancel').addEventListener('click', close);
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+
+    modal.querySelector('#addCatSave').addEventListener('click', async () => {
+      const name = document.getElementById('newCatName').value.trim();
+      if (!name) { NVR.toast('error', 'Błąd', 'Podaj nazwę kategorii'); return; }
+      try {
+        await NVR.api.post('/api/categories', { name, color: selectedColor });
+        NVR.toast('success', 'Dodano', name);
+        close();
+        renderCategoryBar();
+      } catch (err) {
+        NVR.toast('error', 'Błąd', err.message);
+      }
+    });
+
+    document.getElementById('newCatName').focus();
   }
 
   /* ----------------------------------------------------------
@@ -49,8 +221,6 @@
   ---------------------------------------------------------- */
   function renderGrid() {
     const page = document.getElementById('page-dashboard');
-
-    // Ensure scrollable content wrapper exists
     let content = page.querySelector('.dashboard-content');
     if (!content) {
       content = document.createElement('div');
@@ -58,37 +228,52 @@
       page.appendChild(content);
     }
 
+    const cameras = filterCat
+      ? NVR.cameras.filter(c => c.category === filterCat)
+      : NVR.cameras;
+
     if (!NVR.cameras.length) {
       content.innerHTML = `
         <div class="empty-state">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
           </svg>
-          <h3>No Cameras Yet</h3>
-          <p>Add your first camera to start monitoring.</p>
-          <button class="btn btn-primary mt-2" id="emptyAddBtn">Add Camera</button>
-        </div>
-      `;
+          <h3>Brak kamer</h3>
+          <p>Dodaj pierwszą kamerę aby zacząć monitoring.</p>
+          <button class="btn btn-primary mt-2" id="emptyAddBtn">Dodaj kamerę</button>
+        </div>`;
       content.querySelector('#emptyAddBtn').addEventListener('click', () => {
-        NVR.cameraModal.open(null, renderGrid);
+        NVR.cameraModal.open(null, async () => {
+          await NVR.loadCameras();
+          renderCategoryBar();
+          renderGrid();
+        });
       });
+      return;
+    }
+
+    if (filterCat && !cameras.length) {
+      content.innerHTML = `
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+          </svg>
+          <h3>Brak kamer w kategorii</h3>
+          <p>Kategoria "${escHtml(filterCat)}" nie ma żadnych kamer.</p>
+        </div>`;
       return;
     }
 
     const grid = document.createElement('div');
     grid.className = `camera-grid grid-${gridCols}`;
-
-    NVR.cameras.forEach(cam => {
-      const tile = buildTile(cam);
-      grid.appendChild(tile);
-    });
+    cameras.forEach(cam => grid.appendChild(buildTile(cam)));
 
     content.innerHTML = '';
     content.appendChild(grid);
   }
 
   /* ----------------------------------------------------------
-     Build a single camera tile
+     Build camera tile
   ---------------------------------------------------------- */
   function buildTile(cam) {
     const tile = document.createElement('div');
@@ -102,7 +287,7 @@
         <video muted playsinline autoplay></video>
         <div class="tile-overlay" id="overlay-${cam.id}">
           <div class="spinner"></div>
-          <span>Loading stream...</span>
+          <span>Ładowanie strumienia...</span>
         </div>
       </div>
       <div class="tile-info">
@@ -111,25 +296,20 @@
           ${cam.category !== 'default' ? `<span class="chip">${escHtml(cam.category)}</span>` : ''}
           <span class="tile-badge badge-${statusInfo.cls}" id="badge-${cam.id}">${statusInfo.label}</span>
           ${cam.enabled ? `
-            <button class="tile-btn-play" data-id="${cam.id}" title="Open fullscreen">
-              <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                <path d="M8 5v14l11-7z"/>
-              </svg>
-            </button>
-          ` : ''}
+            <button class="tile-btn-play" data-id="${cam.id}" title="Otwórz pełny ekran">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            </button>` : ''}
           ${(cam.brand === 'hikvision' || cam.brand === 'dahua') ? `
-            <button class="tile-btn-ptz" data-id="${cam.id}" title="PTZ Control">
+            <button class="tile-btn-ptz" data-id="${cam.id}" title="Sterowanie PTZ">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="3"/>
                 <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
               </svg>
-            </button>
-          ` : ''}
+            </button>` : ''}
         </div>
       </div>
     `;
 
-    // Auto-start stream if enabled
     if (cam.enabled) {
       startTileStream(cam, tile);
     } else {
@@ -138,22 +318,14 @@
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4">
           <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
         </svg>
-        <span>Disabled</span>
-      `;
+        <span>Wyłączona</span>`;
     }
 
-    // Fullscreen button
     tile.addEventListener('click', e => {
-      const btn = e.target.closest('.tile-btn-play');
-      if (btn) {
-        e.stopPropagation();
-        openStreamModal(parseInt(btn.dataset.id));
-      }
-      const ptzBtn = e.target.closest('.tile-btn-ptz');
-      if (ptzBtn) {
-        e.stopPropagation();
-        openStreamModal(parseInt(ptzBtn.dataset.id), true);
-      }
+      const playBtn = e.target.closest('.tile-btn-play');
+      const ptzBtn  = e.target.closest('.tile-btn-ptz');
+      if (playBtn) { e.stopPropagation(); openStreamModal(parseInt(playBtn.dataset.id)); }
+      if (ptzBtn)  { e.stopPropagation(); openStreamModal(parseInt(ptzBtn.dataset.id), true); }
     });
 
     return tile;
@@ -167,22 +339,16 @@
     const video   = tile.querySelector('video');
     const badge   = document.getElementById(`badge-${cam.id}`);
 
-    overlay.innerHTML = `<div class="spinner"></div><span>Starting...</span>`;
+    overlay.innerHTML = `<div class="spinner"></div><span>Łączenie...</span>`;
     overlay.classList.remove('hidden');
 
-    // Tell server we're watching
     NVR.socket.emit('watch_camera', cam.id);
 
-    // Wait for stream_ready
     const handleReady = (cameraId) => {
       if (cameraId !== cam.id) return;
       overlay.classList.add('hidden');
-      if (badge) { badge.className = 'tile-badge badge-streaming'; badge.textContent = 'Live'; }
-
-      // Start HLS player
-      if (hlsPlayers[cam.id]) {
-        try { hlsPlayers[cam.id].destroy(); } catch (_) {}
-      }
+      if (badge) { badge.className = 'tile-badge badge-streaming'; badge.textContent = 'Na żywo'; }
+      if (hlsPlayers[cam.id]) { try { hlsPlayers[cam.id].destroy(); } catch (_) {} }
       hlsPlayers[cam.id] = NVR.createPlayer(video, cam.id);
     };
 
@@ -194,9 +360,8 @@
           <line x1="12" y1="8" x2="12" y2="12"/>
           <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <span style="font-size:11px;max-width:120px">${escHtml(error || 'Stream error')}</span>
-      `;
-      if (badge) { badge.className = 'tile-badge badge-error'; badge.textContent = 'Error'; }
+        <span style="font-size:11px;max-width:120px">${escHtml(error || 'Błąd strumienia')}</span>`;
+      if (badge) { badge.className = 'tile-badge badge-error'; badge.textContent = 'Błąd'; }
     };
 
     NVR._streamReadyListeners.push(handleReady);
@@ -204,26 +369,13 @@
   }
 
   /* ----------------------------------------------------------
-     Status helpers
-  ---------------------------------------------------------- */
-  function getStatusInfo(cam) {
-    if (!cam.enabled) return { cls: 'disabled', label: 'Disabled' };
-    const st = NVR.streamStatuses[cam.id];
-    if (st === 'streaming') return { cls: 'streaming', label: 'Live' };
-    if (st === 'starting')  return { cls: 'starting',  label: 'Starting' };
-    if (st === 'error')     return { cls: 'error',     label: 'Error' };
-    return { cls: 'stopped', label: 'Idle' };
-  }
-
-  /* ----------------------------------------------------------
-     Stream modal (fullscreen with PTZ)
+     Stream modal (fullscreen + PTZ)
   ---------------------------------------------------------- */
   function openStreamModal(cameraId, showPtz = false) {
     const cam = NVR.cameras.find(c => c.id === cameraId);
     if (!cam) return;
 
-    // Cleanup old modal
-    closeStreamModal();
+    document.getElementById('streamModalOverlay') && closeStreamModal();
 
     const overlay = document.createElement('div');
     overlay.className = 'stream-modal-overlay';
@@ -245,26 +397,19 @@
           <div class="stream-video-area">
             <video id="streamModalVideo" muted playsinline autoplay controls></video>
             <div class="tile-overlay" id="streamModalOverlayInner">
-              <div class="spinner"></div>
-              <span>Connecting to stream...</span>
+              <div class="spinner"></div><span>Łączenie...</span>
             </div>
           </div>
           ${hasPtz ? `<div class="stream-side-panel" id="streamSidePanel"></div>` : ''}
         </div>
-      </div>
-    `;
+      </div>`;
 
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add('open'));
 
     const video   = overlay.querySelector('#streamModalVideo');
     const innerOv = overlay.querySelector('#streamModalOverlayInner');
-
-    overlay.querySelector('#streamModalClose').addEventListener('click', closeStreamModal);
-    overlay.addEventListener('click', e => { if (e.target === overlay) closeStreamModal(); });
-
-    // Socket events
-    let modalHls = null;
+    let modalHls  = null;
 
     function handleReady(id) {
       if (id !== cameraId) return;
@@ -275,44 +420,30 @@
 
     function handleError(id, err) {
       if (id !== cameraId) return;
-      innerOv.innerHTML = `
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="8" x2="12" y2="12"/>
-          <line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
-        <span>${escHtml(err || 'Stream failed')}</span>
-      `;
+      innerOv.innerHTML = `<span>${escHtml(err || 'Błąd strumienia')}</span>`;
     }
 
     NVR._streamReadyListeners.push(handleReady);
     NVR._streamErrorListeners.push(handleError);
-
     NVR.socket.emit('watch_camera', cameraId);
 
-    // Check if stream already running
-    if (NVR.streamStatuses[cameraId] === 'streaming') {
-      handleReady(cameraId);
-    }
+    if (NVR.streamStatuses[cameraId] === 'streaming') handleReady(cameraId);
 
-    // PTZ panel
     if (hasPtz) {
       const sidePanel = overlay.querySelector('#streamSidePanel');
-      if (sidePanel) {
-        NVR.ptzControl.render(sidePanel, cam);
-      }
+      if (sidePanel) NVR.ptzControl.render(sidePanel, cam);
     }
 
     overlay._cleanup = function () {
       NVR.socket.emit('unwatch_camera', cameraId);
-      const ri = NVR._streamReadyListeners.indexOf(handleReady);
-      if (ri !== -1) NVR._streamReadyListeners.splice(ri, 1);
-      const ei = NVR._streamErrorListeners.indexOf(handleError);
-      if (ei !== -1) NVR._streamErrorListeners.splice(ei, 1);
+      [NVR._streamReadyListeners, NVR._streamErrorListeners].forEach(arr => {
+        [handleReady, handleError].forEach(fn => { const i = arr.indexOf(fn); if (i !== -1) arr.splice(i, 1); });
+      });
       if (modalHls) { try { modalHls.destroy(); } catch (_) {} }
     };
 
-    streamModal = overlay;
+    overlay.querySelector('#streamModalClose').addEventListener('click', closeStreamModal);
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeStreamModal(); });
   }
 
   function closeStreamModal() {
@@ -322,16 +453,39 @@
       overlay.classList.remove('open');
       setTimeout(() => { try { overlay.remove(); } catch (_) {} }, 250);
     }
-    streamModal = null;
   }
 
   /* ----------------------------------------------------------
-     Page init
+     Status helpers
   ---------------------------------------------------------- */
-  function initDashboard() {
+  function getStatusInfo(cam) {
+    if (!cam.enabled) return { cls: 'disabled', label: 'Wyłączona' };
+    const st = NVR.streamStatuses[cam.id];
+    if (st === 'streaming') return { cls: 'streaming', label: 'Na żywo' };
+    if (st === 'starting')  return { cls: 'starting',  label: 'Start...' };
+    if (st === 'error')     return { cls: 'error',     label: 'Błąd' };
+    return { cls: 'stopped', label: 'Czeka' };
+  }
+
+  /* ----------------------------------------------------------
+     Init
+  ---------------------------------------------------------- */
+  async function initDashboard() {
+    await NVR.loadCameras();
     renderTopbar();
+    renderCategoryBar();
     renderGrid();
   }
+
+  // React to category activation from server (other clients or on connect)
+  NVR._categoryListeners = NVR._categoryListeners || [];
+  NVR._categoryListeners.push(async (cat) => {
+    if (NVR.currentPage !== 'dashboard') return;
+    filterCat = cat;
+    await NVR.loadCameras();
+    renderCategoryBar();
+    renderGrid();
+  });
 
   NVR.pages.dashboard = initDashboard;
   NVR.pagesRenderTopbar = NVR.pagesRenderTopbar || {};
@@ -341,9 +495,7 @@
      Helpers
   ---------------------------------------------------------- */
   function escHtml(str) {
-    return String(str || '').replace(/[&<>"']/g, c => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[c]));
+    return String(str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
 })();

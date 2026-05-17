@@ -9,6 +9,7 @@ window.NVR = {
   socket: null,
   cameras: [],
   streamStatuses: {},
+  activeCategory: null,
   currentPage: 'dashboard',
   pages: {}
 };
@@ -259,6 +260,12 @@ function initSocket() {
     NVR.streamStatuses[cameraId] = 'starting';
     NVR._statusListeners.forEach(fn => fn(cameraId, 'starting'));
   });
+
+  socket.on('category_activated', (categoryName) => {
+    NVR.activeCategory = categoryName;
+    NVR._categoryListeners = NVR._categoryListeners || [];
+    NVR._categoryListeners.forEach(fn => fn(categoryName));
+  });
 }
 
 NVR._statusListeners      = [];
@@ -366,7 +373,7 @@ async function initApp() {
 /* ============================================================
    Settings Page
    ============================================================ */
-NVR.pages.settings = function initSettings() {
+NVR.pages.settings = async function initSettings() {
   const page = document.getElementById('page-settings');
   page.innerHTML = '';
 
@@ -449,6 +456,14 @@ NVR.pages.settings = function initSettings() {
       </div>
     </div>
 
+    <div class="settings-section" id="settingsCategoriesSection">
+      <div class="settings-section-header" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Zarządzanie Kategoriami</span>
+        <button class="btn btn-sm btn-primary" id="settingsAddCatBtn">+ Nowa kategoria</button>
+      </div>
+      <div id="settingsCatList"><div style="padding:14px 18px;color:var(--text-dim);font-size:13px">Ładowanie...</div></div>
+    </div>
+
     <div class="settings-section">
       <div class="settings-section-header">About</div>
       <div class="settings-row">
@@ -463,6 +478,13 @@ NVR.pages.settings = function initSettings() {
 
   page.appendChild(content);
 
+  // Populate categories list
+  loadSettingsCategories();
+
+  document.getElementById('settingsAddCatBtn').addEventListener('click', () => {
+    openSettingsCatModal(null);
+  });
+
   // Populate stats
   const total     = NVR.cameras.length;
   const enabled   = NVR.cameras.filter(c => c.enabled).length;
@@ -473,6 +495,127 @@ NVR.pages.settings = function initSettings() {
   if (el('settingsEnabled'))   el('settingsEnabled').textContent   = enabled;
   if (el('settingsStreaming'))  el('settingsStreaming').textContent = streaming;
 };
+
+/* ============================================================
+   Settings — Category Management
+   ============================================================ */
+async function loadSettingsCategories() {
+  const list = document.getElementById('settingsCatList');
+  if (!list) return;
+  try {
+    const cats = await NVR.api.get('/api/categories');
+    if (!cats.length) {
+      list.innerHTML = '<div style="padding:14px 18px;color:var(--text-dim);font-size:13px">Brak kategorii</div>';
+      return;
+    }
+    list.innerHTML = cats.map(cat => `
+      <div class="settings-row" id="cat-row-${CSS.escape(cat.name)}">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="cat-color-dot" style="background:${escHtml(cat.color)};width:12px;height:12px;border-radius:50%;display:inline-block;flex-shrink:0"></span>
+          <div>
+            <div class="settings-label">${escHtml(cat.name)}</div>
+            <div class="settings-desc">${cat.camera_count || 0} kamer, ${cat.enabled_count || 0} aktywnych</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${cat.name !== 'default' ? `
+            <button class="btn btn-sm btn-secondary" data-cat-edit="${escHtml(cat.name)}">Edytuj</button>
+            <button class="btn btn-sm btn-danger"    data-cat-del="${escHtml(cat.name)}">Usuń</button>
+          ` : '<span style="font-size:11px;color:var(--text-dim)">domyślna</span>'}
+        </div>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('[data-cat-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openSettingsCatModal(btn.dataset.catEdit));
+    });
+    list.querySelectorAll('[data-cat-del]').forEach(btn => {
+      btn.addEventListener('click', () => deleteSettingsCat(btn.dataset.catDel));
+    });
+  } catch (err) {
+    list.innerHTML = `<div style="padding:14px 18px;color:var(--danger);font-size:13px">Błąd: ${escHtml(err.message)}</div>`;
+  }
+}
+
+function openSettingsCatModal(existingName) {
+  const old = document.getElementById('settingsCatModal');
+  if (old) old.remove();
+
+  const COLORS = ['#58a6ff','#3fb950','#f85149','#d29922','#bc8cff','#ff7b72','#79c0ff','#56d364'];
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay open';
+  modal.id = 'settingsCatModal';
+  modal.innerHTML = `
+    <div class="modal" style="max-width:380px">
+      <div class="modal-header">
+        <h2>${existingName ? 'Edytuj kategorię' : 'Nowa kategoria'}</h2>
+        <button class="modal-close" id="sCatClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Nazwa</label>
+          <input type="text" id="sCatName" value="${escHtml(existingName || '')}" placeholder="np. Parking" />
+        </div>
+        <div class="form-group" style="margin-top:14px">
+          <label>Kolor</label>
+          <div class="color-picker-row">
+            ${COLORS.map(c => `<button class="color-swatch" data-color="${c}" style="background:${c}" title="${c}"></button>`).join('')}
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="sCatCancel">Anuluj</button>
+        <button class="btn btn-primary" id="sCatSave">Zapisz</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+
+  let selectedColor = COLORS[0];
+  modal.querySelectorAll('.color-swatch').forEach(sw => {
+    sw.addEventListener('click', () => {
+      modal.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+      sw.classList.add('selected');
+      selectedColor = sw.dataset.color;
+    });
+  });
+  modal.querySelector(`[data-color="${COLORS[0]}"]`).classList.add('selected');
+
+  const close = () => modal.remove();
+  modal.querySelector('#sCatClose').addEventListener('click', close);
+  modal.querySelector('#sCatCancel').addEventListener('click', close);
+  modal.addEventListener('click', e => { if (e.target === modal) close(); });
+
+  modal.querySelector('#sCatSave').addEventListener('click', async () => {
+    const name = document.getElementById('sCatName').value.trim();
+    if (!name) { NVR.toast('error', 'Błąd', 'Podaj nazwę'); return; }
+    try {
+      if (existingName) {
+        await NVR.api.put(`/api/categories/${encodeURIComponent(existingName)}`, { newName: name, color: selectedColor });
+        NVR.toast('success', 'Zaktualizowano', name);
+      } else {
+        await NVR.api.post('/api/categories', { name, color: selectedColor });
+        NVR.toast('success', 'Dodano', name);
+      }
+      close();
+      loadSettingsCategories();
+    } catch (err) { NVR.toast('error', 'Błąd', err.message); }
+  });
+}
+
+async function deleteSettingsCat(name) {
+  if (!confirm(`Usunąć kategorię "${name}"? Wszystkie jej kamery zostaną przeniesione do "default".`)) return;
+  try {
+    await NVR.api.del(`/api/categories/${encodeURIComponent(name)}`);
+    NVR.toast('success', 'Usunięto', name);
+    loadSettingsCategories();
+  } catch (err) { NVR.toast('error', 'Błąd', err.message); }
+}
+
+function escHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 // Wait for all scripts to load
 window.addEventListener('load', initApp);
