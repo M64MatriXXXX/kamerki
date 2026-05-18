@@ -49,6 +49,19 @@ class StreamManager extends EventEmitter {
       return existing._promise;
     }
 
+    // Create streamInfo before the Promise so _promise can be assigned without TDZ
+    const streamInfo = {
+      process: null,
+      viewers: new Set(),
+      lastViewerLeft: null,
+      status: 'starting',
+      startTime: new Date(),
+      cameraId,
+      _promise: null
+    };
+    this.streams.set(cameraId, streamInfo);
+    this.emit('stream_starting', cameraId);
+
     const promise = new Promise((resolve, reject) => {
       const dir = this._ensureDir(cameraId);
       const hlsPath = path.join(dir, 'index.m3u8');
@@ -85,18 +98,7 @@ class StreamManager extends EventEmitter {
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
-      const streamInfo = {
-        process: proc,
-        viewers: new Set(),
-        lastViewerLeft: null,
-        status: 'starting',
-        startTime: new Date(),
-        cameraId,
-        _promise: promise
-      };
-
-      this.streams.set(cameraId, streamInfo);
-      this.emit('stream_starting', cameraId);
+      streamInfo.process = proc;
 
       let resolved = false;
       let errorOutput = '';
@@ -169,6 +171,7 @@ class StreamManager extends EventEmitter {
       });
     });
 
+    streamInfo._promise = promise;
     return promise;
   }
 
