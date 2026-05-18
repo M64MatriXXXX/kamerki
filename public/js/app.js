@@ -137,7 +137,7 @@ window.NVR.cameraModal = (function () {
     document.getElementById('fPort').value      = camera.port || 554;
     document.getElementById('fUsername').value  = camera.username || '';
     document.getElementById('fPassword').value  = camera.password === '***' ? '' : (camera.password || '');
-    document.getElementById('fRtspPath').value  = camera.rtsp_path || '/Streaming/Channels/101';
+    document.getElementById('fRtspPath').value  = camera.rtsp_path != null ? camera.rtsp_path : '';
     document.getElementById('fBrand').value     = camera.brand || 'generic';
     document.getElementById('fCategory').value  = camera.category || 'default';
     document.getElementById('fLat').value       = camera.lat != null ? camera.lat : '';
@@ -148,7 +148,7 @@ window.NVR.cameraModal = (function () {
   function refreshCategoryList() {
     NVR.api.get('/api/categories').then(cats => {
       const dl = document.getElementById('categoryList');
-      dl.innerHTML = cats.map(c => `<option value="${c}"></option>`).join('');
+      dl.innerHTML = cats.map(c => `<option value="${c.name}"></option>`).join('');
     }).catch(() => {});
   }
 
@@ -162,7 +162,7 @@ window.NVR.cameraModal = (function () {
       form.reset();
       document.getElementById('cameraId').value = '';
       document.getElementById('fPort').value = '554';
-      document.getElementById('fRtspPath').value = '/Streaming/Channels/101';
+      document.getElementById('fRtspPath').value = '';
       document.getElementById('fBrand').value = 'generic';
       document.getElementById('fEnabled').value = '1';
     }

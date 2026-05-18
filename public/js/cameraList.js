@@ -358,7 +358,4 @@
     }[c]));
   }
 
-  // Expose NVR.api locally
-  const NVR = window.NVR;
-
 })();
