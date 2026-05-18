@@ -1603,3 +1603,22 @@ body.sidebar-open .sidebar-backdrop { display: block; }
   .admin-tab  { padding: 8px 12px; font-size: 12px; }
   .admin-body { padding: 14px; }
 }
+
+/* ============================================================
+   Import dropzone
+   ============================================================ */
+.import-dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+  color: var(--text-muted);
+}
+.import-dropzone:hover,
+.import-dropzone.drag-over {
+  border-color: var(--accent);
+  background: rgba(88,166,255,.06);
+  color: var(--text);
+}

@@ -102,4 +102,46 @@ router.get('/meta/categories', (req, res) => {
   }
 });
 
+// POST /api/cameras/import — bulk import
+router.post('/import', (req, res) => {
+  try {
+    const { cameras, skipDuplicates = true, defaultCategory = 'default' } = req.body;
+    if (!Array.isArray(cameras) || !cameras.length)
+      return res.status(400).json({ error: 'Brak danych do importu' });
+
+    const existingIPs = new Set(db.getAllCameras().map(c => c.ip));
+    let imported = 0, skipped = 0, errors = [];
+
+    for (const cam of cameras) {
+      try {
+        if (!cam.ip) { skipped++; continue; }
+        if (skipDuplicates && existingIPs.has(cam.ip.trim())) { skipped++; continue; }
+        const cat = (cam.category || defaultCategory || 'default').trim();
+        db.ensureCategoryExists(cat);
+        db.createCamera({
+          name:      (cam.name || cam.ip).trim(),
+          ip:        cam.ip.trim(),
+          port:      parseInt(cam.port) || 554,
+          username:  cam.username || '',
+          password:  cam.password || '',
+          rtsp_path: cam.rtsp_path || '',
+          brand:     cam.brand || 'hikvision',
+          category:  cat,
+          lat:       cam.lat != null && cam.lat !== '' ? parseFloat(cam.lat) : null,
+          lng:       cam.lng != null && cam.lng !== '' ? parseFloat(cam.lng) : null,
+          enabled:   cam.enabled !== undefined ? (cam.enabled ? 1 : 0) : 1
+        });
+        existingIPs.add(cam.ip.trim());
+        imported++;
+      } catch (e) {
+        errors.push({ ip: cam.ip, error: e.message });
+      }
+    }
+
+    res.json({ success: true, imported, skipped, errors });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
