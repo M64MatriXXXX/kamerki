@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="theme-color" content="#161b22"/>
+  <title>NVR Pro — Logowanie</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d1117;
+      --card:     #161b22;
+      --border:   #30363d;
+      --accent:   #58a6ff;
+      --success:  #3fb950;
+      --danger:   #f85149;
+      --text:     #e6edf3;
+      --text-dim: #8b949e;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .login-wrap {
+      width: 100%;
+      max-width: 380px;
+      animation: fadeIn .35s ease;
+    }
+
+    @keyframes fadeIn { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:none; } }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+
+    .logo svg {
+      width: 36px;
+      height: 36px;
+      color: var(--accent);
+    }
+
+    .logo-text {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, var(--accent), #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+    }
+
+    .card h1 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .card .subtitle {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-bottom: 28px;
+    }
+
+    .form-group {
+      margin-bottom: 18px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+      letter-spacing: .3px;
+    }
+
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+      transition: border-color .2s;
+    }
+
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.15); }
+
+    .pwd-wrap { position: relative; }
+    .pwd-wrap input { padding-right: 42px; }
+    .pwd-toggle {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 4px;
+      line-height: 0;
+    }
+    .pwd-toggle:hover { color: var(--text); }
+    .pwd-toggle svg { width: 16px; height: 16px; }
+
+    .remember {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-bottom: 24px;
+    }
+
+    .remember input { width: auto; accent-color: var(--accent); }
+
+    .btn-login {
+      width: 100%;
+      background: var(--accent);
+      color: #0d1117;
+      font-weight: 700;
+      font-size: 15px;
+      border: none;
+      border-radius: 8px;
+      padding: 12px;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+      position: relative;
+    }
+
+    .btn-login:hover:not(:disabled) { opacity: .9; }
+    .btn-login:active { transform: scale(.98); }
+    .btn-login:disabled { opacity: .5; cursor: not-allowed; }
+
+    .error-box {
+      background: rgba(248,81,73,.1);
+      border: 1px solid rgba(248,81,73,.3);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: var(--danger);
+      margin-bottom: 18px;
+      display: none;
+    }
+
+    .error-box.show { display: block; animation: shake .3s ease; }
+
+    @keyframes shake {
+      0%,100% { transform: translateX(0); }
+      20%,60%  { transform: translateX(-6px); }
+      40%,80%  { transform: translateX(6px); }
+    }
+
+    .spinner-ring {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(0,0,0,.3);
+      border-top-color: #000;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .version {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 11px;
+      color: #3d444d;
+    }
+
+    /* Force password change form */
+    #changePwdSection { display: none; }
+    #changePwdSection.show { display: block; }
+  </style>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M3 9l4-4 5 2 5-2 4 4v6l-4 4-5-2-5 2-4-4V9z"/>
+    </svg>
+    <span class="logo-text">NVR Pro</span>
+  </div>
+
+  <!-- Login form -->
+  <div class="card" id="loginCard">
+    <h1>Zaloguj się</h1>
+    <p class="subtitle">System monitoringu — Ełk</p>
+
+    <div class="error-box" id="loginError"></div>
+
+    <div class="form-group">
+      <label for="username">Login</label>
+      <input type="text" id="username" autocomplete="username" placeholder="admin" autofocus/>
+    </div>
+
+    <div class="form-group">
+      <label for="password">Hasło</label>
+      <div class="pwd-wrap">
+        <input type="password" id="password" autocomplete="current-password" placeholder="••••••••"/>
+        <button class="pwd-toggle" id="pwdToggle" type="button" aria-label="Pokaż hasło">
+          <svg id="eyeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="remember">
+      <input type="checkbox" id="remember"/>
+      <label for="remember" style="margin:0;font-weight:400">Zapamiętaj mnie przez 30 dni</label>
+    </div>
+
+    <button class="btn-login" id="loginBtn" type="button">Zaloguj się</button>
+  </div>
+
+  <!-- Force password change -->
+  <div class="card" id="changePwdSection">
+    <h1>Zmień hasło</h1>
+    <p class="subtitle">Konto wymaga ustawienia nowego hasła przed kontynuacją.</p>
+
+    <div class="error-box" id="changePwdError"></div>
+
+    <div class="form-group">
+      <label>Obecne hasło</label>
+      <div class="pwd-wrap">
+        <input type="password" id="currentPwd" placeholder="••••••••"/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Nowe hasło (min. 6 znaków)</label>
+      <div class="pwd-wrap">
+        <input type="password" id="newPwd" placeholder="••••••••"/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Powtórz nowe hasło</label>
+      <div class="pwd-wrap">
+        <input type="password" id="newPwd2" placeholder="••••••••"/>
+      </div>
+    </div>
+
+    <button class="btn-login" id="changePwdBtn" type="button">Zapisz nowe hasło</button>
+  </div>
+
+  <div class="version">NVR Pro v1.0 · Ełk, Poland</div>
+</div>
+
+<script>
+  const loginCard      = document.getElementById('loginCard');
+  const changePwdSection = document.getElementById('changePwdSection');
+  const loginBtn       = document.getElementById('loginBtn');
+  const changePwdBtn   = document.getElementById('changePwdBtn');
+  const loginError     = document.getElementById('loginError');
+  const changePwdError = document.getElementById('changePwdError');
+
+  function showError(el, msg) {
+    el.textContent = msg;
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+  }
+
+  // Password toggle
+  document.getElementById('pwdToggle').addEventListener('click', () => {
+    const inp = document.getElementById('password');
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+  });
+
+  // Enter key on password
+  document.getElementById('password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loginBtn.click();
+  });
+
+  // Login
+  loginBtn.addEventListener('click', async () => {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const remember = document.getElementById('remember').checked;
+
+    if (!username || !password) { showError(loginError, 'Wypełnij wszystkie pola'); return; }
+
+    loginBtn.disabled = true;
+    loginBtn.innerHTML = '<span class="spinner-ring"></span>Logowanie...';
+
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, remember })
+      });
+      const data = await r.json();
+      if (!r.ok) { showError(loginError, data.error || 'Błąd logowania'); return; }
+
+      if (data.user.forcePasswordChange) {
+        loginCard.style.display = 'none';
+        changePwdSection.classList.add('show');
+        document.getElementById('currentPwd').focus();
+      } else {
+        window.location.href = '/';
+      }
+    } catch (e) {
+      showError(loginError, 'Błąd połączenia z serwerem');
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.textContent = 'Zaloguj się';
+    }
+  });
+
+  // Change password
+  changePwdBtn.addEventListener('click', async () => {
+    const currentPassword = document.getElementById('currentPwd').value;
+    const newPassword     = document.getElementById('newPwd').value;
+    const newPassword2    = document.getElementById('newPwd2').value;
+
+    if (newPassword.length < 6) { showError(changePwdError, 'Hasło musi mieć min. 6 znaków'); return; }
+    if (newPassword !== newPassword2) { showError(changePwdError, 'Hasła nie są identyczne'); return; }
+
+    changePwdBtn.disabled = true;
+    changePwdBtn.innerHTML = '<span class="spinner-ring"></span>Zapisywanie...';
+
+    try {
+      const r = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      const data = await r.json();
+      if (!r.ok) { showError(changePwdError, data.error || 'Błąd'); return; }
+      window.location.href = '/';
+    } catch (e) {
+      showError(changePwdError, 'Błąd połączenia');
+    } finally {
+      changePwdBtn.disabled = false;
+      changePwdBtn.textContent = 'Zapisz nowe hasło';
+    }
+  });
+</script>
+</body>
+</html>
