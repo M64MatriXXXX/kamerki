@@ -262,9 +262,8 @@ function initSocket() {
   });
 
   socket.on('category_activated', (categoryName) => {
+    // Only update which streams are running on the server — never change this client's view
     NVR.activeCategory = categoryName;
-    NVR._categoryListeners = NVR._categoryListeners || [];
-    NVR._categoryListeners.forEach(fn => fn(categoryName));
   });
 }
 

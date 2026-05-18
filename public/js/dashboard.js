@@ -62,17 +62,16 @@
     let categories = [];
     try { categories = await NVR.api.get('/api/categories'); } catch (_) {}
 
-    const active = NVR.activeCategory;
-
+    // filterCat is this client's local view filter — independent of other clients
     bar.innerHTML = `
       <div class="cat-bar-inner">
         <span class="cat-bar-label">Kategorie:</span>
         <div class="cat-bar-buttons">
-          <button class="cat-btn ${active === null ? 'cat-btn-all-active' : ''}" data-cat="__all__">
+          <button class="cat-btn ${filterCat === null ? 'cat-btn-all-active' : ''}" data-cat="__all__">
             Wszystkie
           </button>
           ${categories.map(cat => `
-            <button class="cat-btn ${active === cat.name ? 'cat-btn-active' : ''}"
+            <button class="cat-btn ${filterCat === cat.name ? 'cat-btn-active' : ''}"
               data-cat="${escHtml(cat.name)}"
               style="--cat-color:${escHtml(cat.color || '#58a6ff')}">
               <span class="cat-dot" style="background:${escHtml(cat.color || '#58a6ff')}"></span>
@@ -82,19 +81,10 @@
           `).join('')}
           <button class="cat-btn cat-btn-add" id="catAddBtn" title="Dodaj kategorię">+</button>
         </div>
-        ${active !== null ? `
-          <button class="cat-deactivate-btn" id="catDeactivateBtn" title="Wyłącz wszystkie streamy">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
-            </svg>
-            Wyłącz wszystkie
-          </button>
-        ` : ''}
       </div>
     `;
 
-    // All cameras button
+    // All cameras — local filter only
     bar.querySelector('[data-cat="__all__"]').addEventListener('click', async () => {
       filterCat = null;
       await NVR.loadCameras();
@@ -102,47 +92,18 @@
       renderGrid();
     });
 
-    // Category buttons
+    // Category buttons — local filter only, no server broadcast
     bar.querySelectorAll('[data-cat]:not([data-cat="__all__"])').forEach(btn => {
       btn.addEventListener('click', async () => {
-        const cat = btn.dataset.cat;
-        await activateCategory(cat);
+        filterCat = btn.dataset.cat;
+        await NVR.loadCameras();
+        renderCategoryBar();
+        renderGrid();
       });
     });
 
-    // Deactivate button
-    const deactivateBtn = bar.querySelector('#catDeactivateBtn');
-    if (deactivateBtn) {
-      deactivateBtn.addEventListener('click', async () => {
-        await activateCategory(null);
-      });
-    }
-
     // Add category button
     bar.querySelector('#catAddBtn').addEventListener('click', () => openAddCategoryModal());
-  }
-
-  /* ----------------------------------------------------------
-     Activate category
-  ---------------------------------------------------------- */
-  async function activateCategory(categoryName) {
-    try {
-      const result = await NVR.api.post('/api/categories/activate', { category: categoryName });
-      NVR.activeCategory = result.activeCategory;
-      filterCat = result.activeCategory;
-
-      if (categoryName) {
-        NVR.toast('success', 'Kategoria aktywna', `Uruchamianie kamer: ${categoryName}`);
-      } else {
-        NVR.toast('info', 'Tryb na żądanie', 'Wszystkie streamy zatrzymane');
-      }
-
-      await NVR.loadCameras();
-      renderCategoryBar();
-      renderGrid();
-    } catch (err) {
-      NVR.toast('error', 'Błąd', err.message);
-    }
   }
 
   /* ----------------------------------------------------------
@@ -555,14 +516,6 @@
   }
 
   // React to category_activated from server — only redraw the category bar
-  // (which stream is "active" on server), but do NOT change this client's view filter.
-  // Each client controls its own filterCat independently.
-  NVR._categoryListeners = NVR._categoryListeners || [];
-  NVR._categoryListeners.push(async () => {
-    if (NVR.currentPage !== 'dashboard') return;
-    renderCategoryBar();
-  });
-
   NVR.pages.dashboard = initDashboard;
   NVR.pagesRenderTopbar = NVR.pagesRenderTopbar || {};
   NVR.pagesRenderTopbar.dashboard = renderTopbar;
