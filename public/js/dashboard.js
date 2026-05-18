@@ -7,7 +7,8 @@
 
   let gridCols      = 2;
   let hlsPlayers    = {};
-  let filterCat     = null;
+  let filterCat     = 'default';
+  let lazyMode      = localStorage.getItem('nvr_lazy') === '1';
   let tileCleanups  = []; // cleanup functions for current grid tiles
 
   /* ----------------------------------------------------------
@@ -22,6 +23,14 @@
         <button class="layout-btn ${gridCols===3?'active':''}" data-cols="3">3×3</button>
         <button class="layout-btn ${gridCols===4?'active':''}" data-cols="4">4×4</button>
       </div>
+      <button class="btn btn-sm ${lazyMode ? 'btn-primary' : 'btn-secondary'}" id="lazyModeBtn" title="${lazyMode ? 'Tryb leniwy: strumienie uruchamiają się po kliknięciu' : 'Auto-start: strumienie uruchamiają się automatycznie'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;flex-shrink:0">
+          ${lazyMode
+            ? '<circle cx="12" cy="12" r="10"/><line x1="10" y1="15" x2="10" y2="9"/><line x1="14" y1="15" x2="14" y2="9"/>'
+            : '<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>'}
+        </svg>
+        ${lazyMode ? 'Leniwy' : 'Auto'}
+      </button>
       <button class="btn btn-primary btn-sm" id="dashAddCamera">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -36,6 +45,13 @@
         renderTopbar();
         renderGrid();
       });
+    });
+
+    document.getElementById('lazyModeBtn').addEventListener('click', () => {
+      lazyMode = !lazyMode;
+      localStorage.setItem('nvr_lazy', lazyMode ? '1' : '0');
+      renderTopbar();
+      renderGrid();
     });
 
     document.getElementById('dashAddCamera').addEventListener('click', () => {
@@ -282,15 +298,33 @@
       </div>
     `;
 
-    if (cam.enabled) {
-      startTileStream(cam, tile);
-    } else {
-      const overlay = tile.querySelector(`#overlay-${cam.id}`);
+    const overlay = tile.querySelector(`#overlay-${cam.id}`);
+    if (!cam.enabled) {
       overlay.innerHTML = `
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".4">
           <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
         </svg>
         <span>Wyłączona</span>`;
+    } else if (lazyMode) {
+      overlay.innerHTML = `
+        <div style="width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;transition:background .15s">
+          <svg viewBox="0 0 24 24" fill="white" width="26" height="26" style="margin-left:3px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </div>
+        <span style="margin-top:8px;font-size:12px;opacity:.7">Kliknij aby oglądać</span>`;
+      overlay.style.cursor = 'pointer';
+
+      const lazyStart = (e) => {
+        e.stopPropagation();
+        overlay.style.cursor = '';
+        overlay.innerHTML = '<div class="spinner"></div><span>Łączenie...</span>';
+        overlay.removeEventListener('click', lazyStart);
+        startTileStream(cam, tile);
+      };
+      overlay.addEventListener('click', lazyStart);
+
+      tileCleanups.push(() => overlay.removeEventListener('click', lazyStart));
+    } else {
+      startTileStream(cam, tile);
     }
 
     tile.addEventListener('click', e => {

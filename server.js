@@ -131,6 +131,18 @@ app.get('/api/streams/status', (req, res) => {
   res.json(streamManager.getAllStatuses());
 });
 
+// Stop all running streams
+app.post('/api/streams/stop-all', requirePermission('manage_categories'), (req, res) => {
+  try {
+    streamManager.shutdown();
+    auditLog(req, 'STOP_ALL_STREAMS', 'streams', {});
+    io.emit('streams_stopped_all');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── SPA fallback (protected) ──────────────────────────────────
 app.get('*', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

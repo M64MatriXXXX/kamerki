@@ -43,6 +43,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
             Aktywne sesje
           </button>
+          <button class="admin-tab" data-tab="streams">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+            Streamy
+          </button>
           <button class="admin-tab" data-tab="myaccount">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             Moje konto
@@ -70,6 +74,7 @@
     if (tab === 'users')     renderUsers(body);
     if (tab === 'logs')      renderLogs(body);
     if (tab === 'sessions')  renderSessions(body);
+    if (tab === 'streams')   renderStreams(body);
     if (tab === 'myaccount') renderMyAccount(body);
   }
 
@@ -465,6 +470,137 @@
 
     document.getElementById('sessRefresh').addEventListener('click', load);
     load();
+  }
+
+  /* ----------------------------------------------------------
+     Streams tab
+  ---------------------------------------------------------- */
+  async function renderStreams(body) {
+    const lazyOn = localStorage.getItem('nvr_lazy') === '1';
+
+    body.innerHTML = `
+      <div style="max-width:600px">
+        <div style="font-size:16px;font-weight:700;margin-bottom:4px">Zarządzanie streamami</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:24px">Kontrola aktywnych procesów FFmpeg i trybu uruchamiania</div>
+
+        <!-- Active streams card -->
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+            <div>
+              <div style="font-size:13px;color:var(--text-dim);margin-bottom:4px">Aktywne strumienie</div>
+              <div style="font-size:28px;font-weight:800;color:var(--accent)" id="activeStreamCount">—</div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-sm btn-secondary" id="streamsRefreshBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                Odśwież
+              </button>
+              <button class="btn btn-sm btn-danger" id="stopAllStreamsBtn">
+                <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                Zatrzymaj wszystkie
+              </button>
+            </div>
+          </div>
+          <div id="streamsList" style="margin-top:16px"></div>
+        </div>
+
+        <!-- Lazy mode card -->
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+            <div>
+              <div style="font-size:14px;font-weight:600;margin-bottom:4px">Tryb leniwy (on-demand)</div>
+              <div style="font-size:12px;color:var(--text-dim);line-height:1.5">
+                Gdy włączony, kafelki kamer na dashboardzie pokazują przycisk ▶ zamiast automatycznie uruchamiać stream.
+                Strumień startuje dopiero po kliknięciu kafelka. Zmniejsza obciążenie serwera przy dużej liczbie kamer.
+              </div>
+            </div>
+            <label class="toggle-switch" style="flex-shrink:0;margin-top:2px">
+              <input type="checkbox" id="lazyModeToggle" ${lazyOn ? 'checked' : ''}/>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div id="lazyModeStatus" style="margin-top:12px;font-size:12px;color:var(--text-dim)">
+            ${lazyOn
+              ? '<span style="color:var(--accent)">● Włączony</span> — strumienie uruchamiają się po kliknięciu'
+              : '<span style="color:var(--text-dim)">● Wyłączony</span> — strumienie uruchamiają się automatycznie'}
+          </div>
+        </div>
+      </div>
+    `;
+
+    loadStreamsList();
+
+    document.getElementById('streamsRefreshBtn').addEventListener('click', loadStreamsList);
+
+    document.getElementById('stopAllStreamsBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('stopAllStreamsBtn');
+      if (!confirm('Zatrzymać wszystkie aktywne strumienie FFmpeg?')) return;
+      btn.disabled = true;
+      btn.textContent = 'Zatrzymywanie...';
+      try {
+        await NVR.api.post('/api/streams/stop-all', {});
+        NVR.toast('success', 'Zatrzymano', 'Wszystkie strumienie zostały zatrzymane');
+        setTimeout(loadStreamsList, 800);
+      } catch (e) {
+        NVR.toast('error', 'Błąd', e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px"><rect x="3" y="3" width="18" height="18" rx="2"/></svg> Zatrzymaj wszystkie`;
+      }
+    });
+
+    document.getElementById('lazyModeToggle').addEventListener('change', (e) => {
+      const on = e.target.checked;
+      localStorage.setItem('nvr_lazy', on ? '1' : '0');
+      const status = document.getElementById('lazyModeStatus');
+      if (status) {
+        status.innerHTML = on
+          ? '<span style="color:var(--accent)">● Włączony</span> — strumienie uruchamiają się po kliknięciu'
+          : '<span style="color:var(--text-dim)">● Wyłączony</span> — strumienie uruchamiają się automatycznie';
+      }
+      NVR.toast('success', 'Tryb leniwy', on ? 'Włączony' : 'Wyłączony');
+    });
+  }
+
+  async function loadStreamsList() {
+    const countEl = document.getElementById('activeStreamCount');
+    const listEl  = document.getElementById('streamsList');
+    if (!countEl || !listEl) return;
+
+    try {
+      const statuses = await NVR.api.get('/api/streams/status');
+      const running = Object.entries(statuses).filter(([, s]) => s.status === 'running');
+      if (countEl) countEl.textContent = running.length;
+
+      if (!running.length) {
+        listEl.innerHTML = '<div style="color:var(--text-dim);font-size:13px">Brak aktywnych strumieni</div>';
+        return;
+      }
+
+      const cameras = await NVR.api.get('/api/cameras').catch(() => []);
+      const camMap  = Object.fromEntries(cameras.map(c => [c.id, c]));
+
+      listEl.innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Kamera</th><th>Kategoria</th><th>Status</th><th>Widzowie</th></tr></thead>
+            <tbody>
+              ${running.map(([id, s]) => {
+                const cam = camMap[id] || {};
+                return `<tr>
+                  <td style="font-weight:600">${escHtml(cam.name || `Camera #${id}`)}</td>
+                  <td style="font-size:12px;color:var(--text-dim)">${escHtml(cam.category || '—')}</td>
+                  <td><span class="tile-badge badge-streaming">Na żywo</span></td>
+                  <td style="font-size:13px">${s.viewers ?? 0}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    } catch (e) {
+      if (countEl) countEl.textContent = '—';
+      if (listEl) listEl.innerHTML = `<div style="color:var(--danger);font-size:13px">Błąd: ${escHtml(e.message)}</div>`;
+    }
   }
 
   /* ----------------------------------------------------------
