@@ -289,9 +289,18 @@ window.NVR.createPlayer = function (videoEl, cameraId) {
   if (Hls.isSupported()) {
     const hls = new Hls({
       lowLatencyMode: true,
-      backBufferLength: 0,
-      maxBufferLength: 10,
-      liveSyncDurationCount: 2
+      // Stay as close to live edge as possible
+      liveSyncDurationCount:      1,    // target: 1 segment behind live
+      liveMaxLatencyDurationCount: 2,   // max: 2 segments behind live
+      // Buffer limits — keep small for live/PTZ use
+      maxBufferLength:   2,
+      maxMaxBufferLength: 4,
+      backBufferLength:  0,
+      // Catch up faster when lagging behind live
+      maxLiveSyncPlaybackRate: 2,
+      // Don't wait long for fragments
+      fragLoadingTimeOut:    8000,
+      manifestLoadingTimeOut: 5000,
     });
     hls.loadSource(url);
     hls.attachMedia(videoEl);

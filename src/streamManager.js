@@ -82,13 +82,18 @@ class StreamManager extends EventEmitter {
       console.log(`[FFmpeg] HLS output → ${hlsPath}`);
 
       const ffmpegArgs = [
+        // Low-latency RTSP input
+        '-fflags', 'nobuffer',
+        '-flags', 'low_delay',
         '-rtsp_transport', 'tcp',
         '-i', rtspUrl,
+        // Copy video stream as-is (no re-encoding = zero transcoding delay)
         '-c:v', 'copy',
         '-c:a', 'aac',
-        '-hls_time', '2',
-        '-hls_list_size', '3',
-        '-hls_flags', 'delete_segments+append_list',
+        // 1-second segments, 2 in playlist = ~2s theoretical minimum latency
+        '-hls_time', '1',
+        '-hls_list_size', '2',
+        '-hls_flags', 'delete_segments+append_list+split_by_time',
         '-hls_segment_filename', segmentPattern,
         '-f', 'hls',
         hlsPath
