@@ -554,14 +554,13 @@
     renderGrid();
   }
 
-  // React to category activation from server (other clients or on connect)
+  // React to category_activated from server — only redraw the category bar
+  // (which stream is "active" on server), but do NOT change this client's view filter.
+  // Each client controls its own filterCat independently.
   NVR._categoryListeners = NVR._categoryListeners || [];
-  NVR._categoryListeners.push(async (cat) => {
+  NVR._categoryListeners.push(async () => {
     if (NVR.currentPage !== 'dashboard') return;
-    filterCat = cat;
-    await NVR.loadCameras();
     renderCategoryBar();
-    renderGrid();
   });
 
   NVR.pages.dashboard = initDashboard;
