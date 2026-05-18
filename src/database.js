@@ -52,7 +52,54 @@ function initSchema() {
     );
 
     INSERT OR IGNORE INTO categories (name, color) VALUES ('default', '#8b949e');
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      display_name TEXT,
+      password_hash TEXT NOT NULL,
+      role TEXT DEFAULT 'viewer' CHECK(role IN ('admin','operator','viewer')),
+      permissions TEXT DEFAULT '{}',
+      is_active INTEGER DEFAULT 1,
+      force_password_change INTEGER DEFAULT 1,
+      login_attempts INTEGER DEFAULT 0,
+      locked_until DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_by TEXT DEFAULT 'system',
+      last_login DATETIME,
+      last_login_ip TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      sid TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      expires INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      username TEXT,
+      action TEXT NOT NULL,
+      resource TEXT,
+      ip TEXT,
+      user_agent TEXT,
+      details TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
+
+  // Seed default admin (password: admin1234, must change on first login)
+  const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
+  if (!adminExists) {
+    const bcrypt = require('bcryptjs');
+    const hash = bcrypt.hashSync('admin1234', 12);
+    db.prepare(`
+      INSERT INTO users (username, display_name, password_hash, role, permissions, is_active, force_password_change, created_by)
+      VALUES ('admin', 'Administrator', ?, 'admin', '{}', 1, 1, 'system')
+    `).run(hash);
+    console.log('[DB] Default admin created — login: admin / admin1234');
+  }
 }
 
 // Camera CRUD
@@ -162,6 +209,92 @@ function deletePreset(cameraId, presetNumber) {
   getDb().prepare('DELETE FROM ptz_presets WHERE camera_id = ? AND preset_number = ?').run(cameraId, presetNumber);
 }
 
+// ── User CRUD ────────────────────────────────────────────────
+function getAllUsers() {
+  return getDb().prepare(
+    'SELECT id,username,display_name,role,permissions,is_active,force_password_change,created_at,created_by,last_login,last_login_ip FROM users ORDER BY role,username'
+  ).all();
+}
+
+function getUserById(id) {
+  return getDb().prepare('SELECT * FROM users WHERE id = ?').get(id);
+}
+
+function getUserByUsername(username) {
+  return getDb().prepare('SELECT * FROM users WHERE username = ?').get(username);
+}
+
+function createUser(data) {
+  const stmt = getDb().prepare(`
+    INSERT INTO users (username, display_name, password_hash, role, permissions, is_active, force_password_change, created_by)
+    VALUES (@username, @display_name, @password_hash, @role, @permissions, @is_active, @force_password_change, @created_by)
+  `);
+  const r = stmt.run(data);
+  return getUserById(r.lastInsertRowid);
+}
+
+function updateUser(id, data) {
+  const allowed = ['display_name','role','permissions','is_active','force_password_change'];
+  const fields = Object.keys(data).filter(k => allowed.includes(k)).map(k => `${k} = @${k}`).join(', ');
+  if (!fields) return getUserById(id);
+  getDb().prepare(`UPDATE users SET ${fields} WHERE id = @id`).run({ ...data, id });
+  return getUserById(id);
+}
+
+function updateUserPassword(id, hash) {
+  getDb().prepare('UPDATE users SET password_hash = ?, force_password_change = 0 WHERE id = ?').run(hash, id);
+}
+
+function updateLoginAttempts(id, attempts, lockedUntil) {
+  getDb().prepare('UPDATE users SET login_attempts = ?, locked_until = ? WHERE id = ?').run(attempts, lockedUntil, id);
+}
+
+function updateLastLogin(id, ip) {
+  getDb().prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP, last_login_ip = ?, login_attempts = 0, locked_until = NULL WHERE id = ?').run(ip, id);
+}
+
+function deleteUser(id) {
+  getDb().prepare('DELETE FROM users WHERE id = ?').run(id);
+}
+
+// ── Audit Logs ───────────────────────────────────────────────
+function createAuditLog(data) {
+  getDb().prepare(`
+    INSERT INTO audit_logs (user_id, username, action, resource, ip, user_agent, details)
+    VALUES (@user_id, @username, @action, @resource, @ip, @user_agent, @details)
+  `).run(data);
+}
+
+function getAuditLogs({ limit = 200, offset = 0, username = null, action = null } = {}) {
+  let q = 'SELECT * FROM audit_logs WHERE 1=1';
+  const params = [];
+  if (username) { q += ' AND username LIKE ?'; params.push(`%${username}%`); }
+  if (action)   { q += ' AND action LIKE ?';   params.push(`%${action}%`); }
+  q += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+  return getDb().prepare(q).all(...params);
+}
+
+// ── Session CRUD (for SQLiteStore) ───────────────────────────
+function sessionGet(sid) {
+  return getDb().prepare('SELECT data FROM sessions WHERE sid = ? AND expires > ?').get(sid, Date.now());
+}
+function sessionSet(sid, data, expires) {
+  getDb().prepare('INSERT OR REPLACE INTO sessions (sid, data, expires) VALUES (?, ?, ?)').run(sid, data, expires);
+}
+function sessionDestroy(sid) {
+  getDb().prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
+}
+function sessionCleanup() {
+  getDb().prepare('DELETE FROM sessions WHERE expires <= ?').run(Date.now());
+}
+function sessionGetAll() {
+  return getDb().prepare('SELECT data FROM sessions WHERE expires > ?').all(Date.now());
+}
+function sessionDestroyAll() {
+  getDb().prepare('DELETE FROM sessions').run();
+}
+
 function closeDb() {
   if (db) {
     db.close();
@@ -171,20 +304,13 @@ function closeDb() {
 
 module.exports = {
   getDb,
-  getAllCameras,
-  getCameraById,
-  createCamera,
-  updateCamera,
-  deleteCamera,
-  getCategories,
-  getCategoryNames,
-  getCamerasByCategory,
-  createCategory,
-  updateCategory,
-  deleteCategory,
-  ensureCategoryExists,
-  getPresets,
-  savePreset,
-  deletePreset,
+  getAllCameras, getCameraById, createCamera, updateCamera, deleteCamera,
+  getCategories, getCategoryNames, getCamerasByCategory,
+  createCategory, updateCategory, deleteCategory, ensureCategoryExists,
+  getPresets, savePreset, deletePreset,
+  getAllUsers, getUserById, getUserByUsername, createUser, updateUser,
+  updateUserPassword, updateLoginAttempts, updateLastLogin, deleteUser,
+  createAuditLog, getAuditLogs,
+  sessionGet, sessionSet, sessionDestroy, sessionCleanup, sessionGetAll, sessionDestroyAll,
   closeDb
 };

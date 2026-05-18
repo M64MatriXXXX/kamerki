@@ -11,7 +11,16 @@ window.NVR = {
   streamStatuses: {},
   activeCategory: null,
   currentPage: 'dashboard',
+  currentUser: null,
   pages: {}
+};
+
+const PAGE_TITLES_MAP = {
+  dashboard: 'Dashboard',
+  cameras:   'Cameras',
+  map:       'Map View',
+  settings:  'Settings',
+  admin:     'Panel Administratora'
 };
 
 /* ============================================================
@@ -307,12 +316,7 @@ window.NVR.createPlayer = function (videoEl, cameraId) {
 /* ============================================================
    Router
    ============================================================ */
-const PAGE_TITLES = {
-  dashboard: 'Dashboard',
-  cameras:   'Cameras',
-  map:       'Map View',
-  settings:  'Settings'
-};
+const PAGE_TITLES = PAGE_TITLES_MAP;
 
 function navigateTo(page) {
   if (!PAGE_TITLES[page]) page = 'dashboard';
@@ -353,6 +357,42 @@ function navigateTo(page) {
    App init
    ============================================================ */
 async function initApp() {
+  // Load current user info
+  try {
+    NVR.currentUser = await NVR.api.get('/api/auth/me');
+  } catch (e) {
+    window.location.href = '/login';
+    return;
+  }
+
+  // Populate sidebar user info
+  const avatarEl = document.getElementById('sidebarAvatar');
+  const nameEl   = document.getElementById('sidebarUsername');
+  const roleEl   = document.getElementById('sidebarRole');
+  const roleLabels = { admin: 'Administrator', operator: 'Operator', viewer: 'Przeglądający' };
+
+  if (avatarEl && NVR.currentUser) {
+    const initials = (NVR.currentUser.displayName || NVR.currentUser.username)[0].toUpperCase();
+    const colors   = ['#1f6feb','#388bfd','#3fb950','#d29922','#f85149','#bc8cff'];
+    let h = 0;
+    for (const c of (NVR.currentUser.username || '')) h = (h * 31 + c.charCodeAt(0)) % colors.length;
+    avatarEl.textContent   = initials;
+    avatarEl.style.background = colors[Math.abs(h)];
+    nameEl.textContent     = NVR.currentUser.displayName || NVR.currentUser.username;
+    roleEl.textContent     = roleLabels[NVR.currentUser.role] || NVR.currentUser.role;
+  }
+
+  // Show admin nav link for admins
+  if (NVR.currentUser?.role === 'admin') {
+    document.querySelectorAll('.nav-admin').forEach(el => el.style.display = '');
+  }
+
+  // Logout button
+  document.getElementById('logoutBtn')?.addEventListener('click', async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    window.location.href = '/login';
+  });
+
   // Desktop sidebar toggle
   document.getElementById('sidebarToggle').addEventListener('click', () => {
     document.body.classList.toggle('sidebar-collapsed');

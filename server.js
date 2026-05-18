@@ -11,129 +11,117 @@ const os = require('os');
 
 const streamManager = require('./src/streamManager');
 const db = require('./src/database');
+const {
+  sessionMiddleware, requireAuth, requirePermission,
+  auditLog, setupAuthRoutes
+} = require('./src/auth');
 
-const PORT = process.env.PORT || 3000;
+const PORT    = process.env.PORT    || 3000;
 const HLS_DIR = process.env.HLS_DIR || path.join(os.tmpdir(), 'nvr-streams');
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
-const io = new Server(server, {
+const io     = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
 // Track active category in memory
 let activeCategory = null;
 
-// Middleware
+// ── Middleware ────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.set('trust proxy', 1);
 
-// HLS stream serving
-app.use('/streams', (req, res) => {
+// Session must be before requireAuth
+app.use(sessionMiddleware);
+
+// Auth routes (login/logout/me — before requireAuth so login page works)
+setupAuthRoutes(app);
+
+// Static files — login.html served directly, index.html only after auth
+app.use('/css',    express.static(path.join(__dirname, 'public', 'css')));
+app.use('/js',     express.static(path.join(__dirname, 'public', 'js')));
+app.use('/assets', express.static(path.join(__dirname, 'public', 'assets')));
+
+// HLS streams — protected
+app.use('/streams', requireAuth, (req, res) => {
   const filePath = path.join(HLS_DIR, req.path);
   if (!filePath.startsWith(HLS_DIR)) return res.status(403).send('Forbidden');
-
   if (req.path.endsWith('.m3u8'))    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   else if (req.path.endsWith('.ts')) res.setHeader('Content-Type', 'video/MP2T');
-
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Access-Control-Allow-Origin', '*');
-
   if (!fs.existsSync(filePath)) return res.status(404).send('Not found');
   res.sendFile(filePath);
 });
 
-// ── Camera routes ────────────────────────────────────────────
-app.use('/api/cameras', require('./src/routes/cameras'));
+// ── API routes (all protected) ────────────────────────────────
+app.use('/api', requireAuth);
 
+// Camera routes
+app.use('/api/cameras', require('./src/routes/cameras'));
 const streamRouter = require('./src/routes/streams');
 const ptzRouter    = require('./src/routes/ptz');
 app.use('/api/cameras/:id/stream', streamRouter);
 app.use('/api/cameras/:id/ptz',    ptzRouter);
 
-// ── Category routes ──────────────────────────────────────────
-
-// GET /api/categories — list with stats
+// ── Category routes ───────────────────────────────────────────
 app.get('/api/categories', (req, res) => {
   try { res.json(db.getCategories()); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/categories/active — currently active category
 app.get('/api/categories/active', (req, res) => {
   res.json({ activeCategory });
 });
 
-// POST /api/categories — create new category
-app.post('/api/categories', (req, res) => {
+app.post('/api/categories', requirePermission('manage_categories'), (req, res) => {
   try {
     const { name, color } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
     const cat = db.createCategory(name.trim(), color || '#58a6ff');
+    auditLog(req, 'CREATE_CATEGORY', 'categories', { name });
     res.status(201).json(cat);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PUT /api/categories/:name — rename or change color
-app.put('/api/categories/:name', (req, res) => {
+app.put('/api/categories/:name', requirePermission('manage_categories'), (req, res) => {
   try {
     const cat = db.updateCategory(req.params.name, req.body);
-    // If renamed and it was the active category, update activeCategory
-    if (req.body.newName && activeCategory === req.params.name) {
-      activeCategory = req.body.newName;
-    }
+    if (req.body.newName && activeCategory === req.params.name) activeCategory = req.body.newName;
+    auditLog(req, 'UPDATE_CATEGORY', 'categories', { name: req.params.name });
     res.json(cat);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// DELETE /api/categories/:name — delete (reassigns cameras to default)
-app.delete('/api/categories/:name', (req, res) => {
+app.delete('/api/categories/:name', requirePermission('manage_categories'), (req, res) => {
   try {
     if (req.params.name === 'default') return res.status(400).json({ error: 'Cannot delete default category' });
     db.deleteCategory(req.params.name);
-    if (activeCategory === req.params.name) {
-      activeCategory = null;
-      io.emit('category_activated', null);
-    }
+    if (activeCategory === req.params.name) { activeCategory = null; io.emit('category_activated', null); }
+    auditLog(req, 'DELETE_CATEGORY', 'categories', { name: req.params.name });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/categories/activate — activate category (start its cameras, stop others)
-app.post('/api/categories/activate', async (req, res) => {
+app.post('/api/categories/activate', requirePermission('manage_categories'), async (req, res) => {
   try {
-    const { category } = req.body; // null = deactivate all (on-demand mode)
+    const { category } = req.body;
     activeCategory = category || null;
-
     const allCameras = db.getAllCameras();
-
     if (!activeCategory) {
-      // Deactivate mode — stop all streams, revert to on-demand
       streamManager.shutdown();
       io.emit('category_activated', null);
       return res.json({ success: true, activeCategory: null });
     }
-
-    // Stop cameras NOT in the active category
-    const toStop = allCameras.filter(c => c.category !== activeCategory);
-    for (const cam of toStop) {
-      streamManager.stopStream(cam.id);
-    }
-
-    // Start enabled cameras IN the active category
+    allCameras.filter(c => c.category !== activeCategory).forEach(c => streamManager.stopStream(c.id));
     const toStart = allCameras.filter(c => c.category === activeCategory && c.enabled);
     io.emit('category_activated', activeCategory);
-
     res.json({ success: true, activeCategory, starting: toStart.length });
-
-    // Start streams async after response
     for (const cam of toStart) {
-      const st = streamManager.getStatus(cam.id);
-      if (st.status === 'running') continue;
-      streamManager.startStream(cam).catch(err => {
-        console.error(`[Category] Failed to start camera ${cam.id}: ${err.message}`);
-      });
+      if (streamManager.getStatus(cam.id).status === 'running') continue;
+      streamManager.startStream(cam).catch(e => console.error(`[Category] ${cam.id}: ${e.message}`));
     }
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -143,40 +131,36 @@ app.get('/api/streams/status', (req, res) => {
   res.json(streamManager.getAllStatuses());
 });
 
-// SPA fallback
-app.get('*', (req, res) => {
+// ── SPA fallback (protected) ──────────────────────────────────
+app.get('*', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ── Socket.io ────────────────────────────────────────────────
+// ── Socket.io (session-aware) ─────────────────────────────────
+io.use((socket, next) => sessionMiddleware(socket.request, {}, next));
+
 io.on('connection', (socket) => {
-  console.log(`[Socket] Client connected: ${socket.id}`);
+  const sess = socket.request.session;
+  if (!sess?.userId) { socket.disconnect(true); return; }
+
+  console.log(`[Socket] ${sess.username} connected (${socket.id})`);
   const watchedCameras = new Set();
+  const inProgress = new Set();
 
-  // Send current state to new client
   socket.emit('category_activated', activeCategory);
-
-  const inProgress = new Set(); // guard: prevent concurrent watch_camera for same id
 
   socket.on('watch_camera', async (cameraId) => {
     cameraId = parseInt(cameraId);
-    if (isNaN(cameraId)) return;
-
-    // Already being processed for this socket — ignore duplicate
-    if (inProgress.has(cameraId)) return;
+    if (isNaN(cameraId) || inProgress.has(cameraId)) return;
     inProgress.add(cameraId);
-
     try {
       const camera = db.getCameraById(cameraId);
       if (!camera) { socket.emit('stream_error', cameraId, 'Camera not found'); return; }
       if (!camera.enabled) { socket.emit('stream_error', cameraId, 'Camera is disabled'); return; }
-
       watchedCameras.add(cameraId);
       streamManager.addViewer(cameraId, socket.id);
-
-      const currentStatus = streamManager.getStatus(cameraId);
-      if (currentStatus.status === 'running') { socket.emit('stream_ready', cameraId); return; }
-
+      const st = streamManager.getStatus(cameraId);
+      if (st.status === 'running') { socket.emit('stream_ready', cameraId); return; }
       socket.emit('stream_starting', cameraId);
       await streamManager.startStream(camera);
       socket.emit('stream_ready', cameraId);
@@ -194,7 +178,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`[Socket] Client disconnected: ${socket.id}`);
+    console.log(`[Socket] ${sess.username} disconnected (${socket.id})`);
     streamManager.removeViewerFromAll(socket.id);
   });
 });
@@ -209,7 +193,7 @@ fs.mkdirSync(HLS_DIR, { recursive: true });
 
 server.listen(PORT, () => {
   console.log(`[NVR] Server running on http://localhost:${PORT}`);
-  console.log(`[NVR] HLS streams at /streams/{cameraId}/index.m3u8`);
+  console.log(`[NVR] Default login: admin / admin1234`);
 });
 
 process.on('SIGTERM', shutdown);
