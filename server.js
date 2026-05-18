@@ -156,24 +156,34 @@ io.on('connection', (socket) => {
   // Send current state to new client
   socket.emit('category_activated', activeCategory);
 
+  const inProgress = new Set(); // guard: prevent concurrent watch_camera for same id
+
   socket.on('watch_camera', async (cameraId) => {
     cameraId = parseInt(cameraId);
-    const camera = db.getCameraById(cameraId);
-    if (!camera) { socket.emit('stream_error', cameraId, 'Camera not found'); return; }
-    if (!camera.enabled) { socket.emit('stream_error', cameraId, 'Camera is disabled'); return; }
+    if (isNaN(cameraId)) return;
 
-    watchedCameras.add(cameraId);
-    streamManager.addViewer(cameraId, socket.id);
-
-    const currentStatus = streamManager.getStatus(cameraId);
-    if (currentStatus.status === 'running') { socket.emit('stream_ready', cameraId); return; }
+    // Already being processed for this socket — ignore duplicate
+    if (inProgress.has(cameraId)) return;
+    inProgress.add(cameraId);
 
     try {
+      const camera = db.getCameraById(cameraId);
+      if (!camera) { socket.emit('stream_error', cameraId, 'Camera not found'); return; }
+      if (!camera.enabled) { socket.emit('stream_error', cameraId, 'Camera is disabled'); return; }
+
+      watchedCameras.add(cameraId);
+      streamManager.addViewer(cameraId, socket.id);
+
+      const currentStatus = streamManager.getStatus(cameraId);
+      if (currentStatus.status === 'running') { socket.emit('stream_ready', cameraId); return; }
+
       socket.emit('stream_starting', cameraId);
       await streamManager.startStream(camera);
       socket.emit('stream_ready', cameraId);
     } catch (err) {
       socket.emit('stream_error', cameraId, err.message);
+    } finally {
+      inProgress.delete(cameraId);
     }
   });
 

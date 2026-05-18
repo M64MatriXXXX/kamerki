@@ -38,16 +38,18 @@ class StreamManager extends EventEmitter {
 
   startStream(camera) {
     const cameraId = camera.id;
+    const existing = this.streams.get(cameraId);
 
-    // If stream already running, return immediately
-    if (this.streams.has(cameraId)) {
-      const stream = this.streams.get(cameraId);
-      if (stream.status === 'running') {
-        return Promise.resolve({ hlsUrl: `/streams/${cameraId}/index.m3u8` });
-      }
+    // Already running — no new FFmpeg
+    if (existing?.status === 'running') {
+      return Promise.resolve({ hlsUrl: `/streams/${cameraId}/index.m3u8` });
+    }
+    // Already starting — share the same promise, don't spawn second FFmpeg
+    if (existing?.status === 'starting' && existing._promise) {
+      return existing._promise;
     }
 
-    return new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       const dir = this._ensureDir(cameraId);
       const hlsPath = path.join(dir, 'index.m3u8');
       const segmentPattern = path.join(dir, '%03d.ts');
@@ -89,7 +91,8 @@ class StreamManager extends EventEmitter {
         lastViewerLeft: null,
         status: 'starting',
         startTime: new Date(),
-        cameraId
+        cameraId,
+        _promise: promise
       };
 
       this.streams.set(cameraId, streamInfo);
@@ -165,6 +168,8 @@ class StreamManager extends EventEmitter {
         }
       });
     });
+
+    return promise;
   }
 
   stopStream(cameraId) {

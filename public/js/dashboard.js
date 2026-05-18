@@ -5,9 +5,10 @@
    ============================================================ */
 (function () {
 
-  let gridCols     = 2;
-  let hlsPlayers   = {};
-  let filterCat    = null; // null = show all
+  let gridCols      = 2;
+  let hlsPlayers    = {};
+  let filterCat     = null;
+  let tileCleanups  = []; // cleanup functions for current grid tiles
 
   /* ----------------------------------------------------------
      Topbar
@@ -220,6 +221,10 @@
      Render Grid
   ---------------------------------------------------------- */
   function renderGrid() {
+    // Cleanup previous tiles: remove listeners + stop HLS players + unwatch
+    tileCleanups.forEach(fn => fn());
+    tileCleanups = [];
+
     const page = document.getElementById('page-dashboard');
     let content = page.querySelector('.dashboard-content');
     if (!content) {
@@ -383,6 +388,22 @@
 
     NVR._streamReadyListeners.push(handleReady);
     NVR._streamErrorListeners.push(handleError);
+
+    // Register cleanup for this tile
+    tileCleanups.push(() => {
+      // Stop watching
+      if (NVR.socket) NVR.socket.emit('unwatch_camera', cam.id);
+      // Remove listeners
+      const ri = NVR._streamReadyListeners.indexOf(handleReady);
+      if (ri !== -1) NVR._streamReadyListeners.splice(ri, 1);
+      const ei = NVR._streamErrorListeners.indexOf(handleError);
+      if (ei !== -1) NVR._streamErrorListeners.splice(ei, 1);
+      // Destroy HLS player
+      if (hlsPlayers[cam.id]) {
+        try { hlsPlayers[cam.id].destroy(); } catch (_) {}
+        delete hlsPlayers[cam.id];
+      }
+    });
   }
 
   /* ----------------------------------------------------------
