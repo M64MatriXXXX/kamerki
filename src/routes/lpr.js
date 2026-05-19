@@ -18,10 +18,20 @@ router.get('/status', (req, res) => {
 // POST /api/lpr/start
 router.post('/start', (req, res) => {
   try {
-    const { rtspUrl, interval } = req.body;
-    if (!rtspUrl) return res.status(400).json({ error: 'rtspUrl is required' });
+    const { cameraId, interval } = req.body;
+    if (!cameraId) return res.status(400).json({ error: 'cameraId is required' });
+
+    const cam = db.getCameraById(parseInt(cameraId));
+    if (!cam) return res.status(404).json({ error: 'Camera not found' });
+
+    const auth = cam.username
+      ? `${encodeURIComponent(cam.username)}:${encodeURIComponent(cam.password || '')}@`
+      : '';
+    const rtspPath = cam.rtsp_path || '/stream1';
+    const rtspUrl = `rtsp://${auth}${cam.ip}:${cam.port || 554}${rtspPath}`;
+
     lprManager.start(rtspUrl, parseFloat(interval) || 1.5);
-    res.json({ success: true });
+    res.json({ success: true, camera: cam.name });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

@@ -217,21 +217,32 @@ def main():
     cap = None
     last_proc = 0.0
     consecutive_fail = 0
+    connect_attempts = 0
+    MAX_CONNECT_ATTEMPTS = 10
 
     while True:
         # (Re)open stream
         if cap is None or not cap.isOpened():
-            _emit({'status': 'connecting'})
+            connect_attempts += 1
+            if connect_attempts > MAX_CONNECT_ATTEMPTS:
+                _emit({'status': 'error', 'msg': f'Stream unavailable after {MAX_CONNECT_ATTEMPTS} attempts, giving up'})
+                sys.exit(1)
+
+            backoff = min(30, 3 * connect_attempts)
+            _emit({'status': 'connecting', 'msg': f'Attempt {connect_attempts}/{MAX_CONNECT_ATTEMPTS}'})
             cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
             cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 8000)
             cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 8000)
             if not cap.isOpened():
-                _emit({'status': 'error', 'msg': 'Cannot open RTSP stream'})
-                time.sleep(5)
+                cap.release()
+                cap = None
+                _emit({'status': 'error', 'msg': f'Cannot open RTSP stream (attempt {connect_attempts})'})
+                time.sleep(backoff)
                 continue
             _emit({'status': 'connected'})
             consecutive_fail = 0
+            connect_attempts = 0  # reset on successful connection
 
         # Drain buffer — grab several frames, decode only the last
         for _ in range(3):
@@ -246,7 +257,7 @@ def main():
                 cap.release()
                 cap = None
                 _emit({'status': 'reconnecting'})
-                time.sleep(3)
+                time.sleep(5)
             continue
 
         consecutive_fail = 0

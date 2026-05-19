@@ -53,14 +53,10 @@
         <div class="ai-settings-panel hidden" id="aiSettingsPanel">
           <div class="ai-settings-inner">
             <div class="form-group">
-              <label>Kamera (wybierz lub wpisz URL RTSP)</label>
+              <label>Kamera</label>
               <select id="aiCameraSelect">
-                <option value="">— Wpisz URL ręcznie —</option>
+                <option value="">— Wybierz kamerę —</option>
               </select>
-            </div>
-            <div class="form-group">
-              <label>Własny URL RTSP</label>
-              <input type="text" id="aiRtspUrl" placeholder="rtsp://admin:hasło@172.26.64.19:554/stream1"/>
             </div>
             <div class="form-group">
               <label>Częstotliwość analizy</label>
@@ -134,20 +130,14 @@
       const sel = document.getElementById('aiCameraSelect');
       cameras.filter(c => c.enabled).forEach(c => {
         const opt = document.createElement('option');
-        opt.value = buildRtspUrl(c);
+        opt.value = String(c.id);
         opt.textContent = `${c.name} (${c.ip})`;
         sel.appendChild(opt);
-      });
-      sel.addEventListener('change', () => {
-        if (sel.value) document.getElementById('aiRtspUrl').value = sel.value;
       });
 
       // Pre-select camera 172.26.64.19 if present
       const ai = cameras.find(c => c.ip === '172.26.64.19');
-      if (ai) {
-        sel.value = buildRtspUrl(ai);
-        document.getElementById('aiRtspUrl').value = sel.value;
-      }
+      if (ai) sel.value = String(ai.id);
     } catch (_) {}
 
     // Load initial status
@@ -258,8 +248,7 @@
       updateStatusBadge(st.status);
       updateToggleBtn();
       updateStats(st.stats);
-      if (st.rtspUrl) document.getElementById('aiRtspUrl').value = st.rtspUrl;
-    } catch (_) {}
+      } catch (_) {}
   }
 
   async function refreshStats() {
@@ -319,16 +308,16 @@
       return;
     }
 
-    const rtspUrl  = document.getElementById('aiRtspUrl')?.value?.trim();
+    const cameraId = document.getElementById('aiCameraSelect')?.value;
     const interval = document.getElementById('aiInterval')?.value || '1';
-    if (!rtspUrl) {
+    if (!cameraId) {
       document.getElementById('aiSettingsPanel').classList.remove('hidden');
-      NVR.toast('warning', 'Brak URL', 'Wybierz kamerę lub wpisz adres RTSP');
+      NVR.toast('warning', 'Brak kamery', 'Wybierz kamerę z listy');
       return;
     }
 
     try {
-      await NVR.api.post('/api/lpr/start', { rtspUrl, interval: parseFloat(interval) });
+      await NVR.api.post('/api/lpr/start', { cameraId: parseInt(cameraId), interval: parseFloat(interval) });
       currentStatus = 'initializing';
       updateStatusBadge('initializing');
       updateToggleBtn();
@@ -409,12 +398,6 @@
   /* ----------------------------------------------------------
      Helpers
   ---------------------------------------------------------- */
-  function buildRtspUrl(cam) {
-    const auth = cam.username ? `${encodeURIComponent(cam.username)}:${encodeURIComponent(cam.password || '')}@` : '';
-    const path = cam.rtsp_path || '/stream1';
-    return `rtsp://${auth}${cam.ip}:${cam.port || 554}${path}`;
-  }
-
   function escHtml(str) {
     return String(str || '').replace(/[&<>"']/g, c =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
