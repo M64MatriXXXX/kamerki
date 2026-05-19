@@ -157,6 +157,7 @@
     NVR.socket.on('lpr_plates_saved', onPlatesSaved);
     NVR.socket.on('lpr_status',       onLprStatus);
     NVR.socket.on('stream_ready',     onStreamReady);
+    NVR.socket.on('stream_starting',  onStreamStarting);
   }
 
   /* ----------------------------------------------------------
@@ -167,9 +168,10 @@
     NVR.socket.off('lpr_plates_saved', onPlatesSaved);
     NVR.socket.off('lpr_status',       onLprStatus);
     NVR.socket.off('stream_ready',     onStreamReady);
+    NVR.socket.off('stream_starting',  onStreamStarting);
     stopHlsPlayer();
     if (activeCameraId !== null) {
-      NVR.socket.emit('stream_release', activeCameraId);
+      NVR.socket.emit('unwatch_camera', activeCameraId);
       activeCameraId = null;
     }
   }
@@ -200,7 +202,11 @@
   }
 
   function onStreamReady(cameraId) {
-    if (cameraId === activeCameraId) startHlsPlayer(cameraId);
+    if (parseInt(cameraId) === activeCameraId) startHlsPlayer(parseInt(cameraId));
+  }
+
+  function onStreamStarting(cameraId) {
+    // Stream is starting — placeholder stays visible until stream_ready fires
   }
 
   /* ----------------------------------------------------------
@@ -263,7 +269,7 @@
       // If already running, attach HLS stream
       if (st.cameraId && ['connecting','connected','running','reconnecting'].includes(st.status)) {
         activeCameraId = st.cameraId;
-        NVR.socket.emit('stream_request', st.cameraId);
+        NVR.socket.emit('watch_camera', st.cameraId);
       }
     } catch (_) {}
   }
@@ -323,7 +329,7 @@
         updateToggleBtn();
         stopHlsPlayer();
         if (activeCameraId !== null) {
-          NVR.socket.emit('stream_release', activeCameraId);
+          NVR.socket.emit('unwatch_camera', activeCameraId);
           activeCameraId = null;
         }
       } catch (e) { NVR.toast('error', 'Błąd', e.message); }
@@ -346,7 +352,7 @@
 
       // Request HLS stream — onStreamReady will attach player when ready
       activeCameraId = parseInt(cameraId);
-      NVR.socket.emit('stream_request', activeCameraId);
+      NVR.socket.emit('watch_camera', activeCameraId);
     } catch (e) { NVR.toast('error', 'Błąd', e.message); }
   }
 
