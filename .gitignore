@@ -1,5 +1,7 @@
 node_modules/
 nvr.db
+nvr.db-shm
+nvr.db-wal
 .env
 /tmp/
 *.log
