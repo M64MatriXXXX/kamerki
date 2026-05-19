@@ -27,7 +27,7 @@ router.post('/start', (req, res) => {
     const auth = cam.username
       ? `${encodeURIComponent(cam.username)}:${encodeURIComponent(cam.password || '')}@`
       : '';
-    const rtspPath = cam.rtsp_path || '/stream1';
+    const rtspPath = cam.rtsp_path || '';
     const rtspUrl = `rtsp://${auth}${cam.ip}:${cam.port || 554}${rtspPath}`;
 
     lprManager.start(rtspUrl, parseFloat(interval) || 1.5);
