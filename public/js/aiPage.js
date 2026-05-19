@@ -5,11 +5,12 @@
    ============================================================ */
 (function () {
 
-  let currentStatus    = 'stopped';
-  let liveFrameActive  = true;
-  let statsInterval    = null;
-  let plateOffset      = 0;
-  const PAGE_SIZE      = 50;
+  let currentStatus  = 'stopped';
+  let statsInterval  = null;
+  let plateOffset    = 0;
+  let hlsPlayer      = null;
+  let activeCameraId = null;
+  const PAGE_SIZE    = 50;
 
   /* ----------------------------------------------------------
      Init
@@ -58,15 +59,6 @@
                 <option value="">— Wybierz kamerę —</option>
               </select>
             </div>
-            <div class="form-group">
-              <label>Częstotliwość analizy</label>
-              <select id="aiInterval">
-                <option value="0.5">Co 0,5 s (duże obciążenie)</option>
-                <option value="1" selected>Co 1 s</option>
-                <option value="2">Co 2 s</option>
-                <option value="5">Co 5 s (małe obciążenie)</option>
-              </select>
-            </div>
           </div>
         </div>
 
@@ -76,11 +68,7 @@
           <!-- Left: live detection view -->
           <div class="ai-live-panel">
             <div class="ai-panel-header">
-              <span class="ai-panel-title">Podgląd detekcji</span>
-              <label class="toggle-switch" style="transform:scale(.85)">
-                <input type="checkbox" id="liveToggle" checked/>
-                <span class="toggle-slider"></span>
-              </label>
+              <span class="ai-panel-title">Podgląd na żywo</span>
             </div>
             <div class="ai-live-view" id="aiLiveView">
               <div class="ai-placeholder" id="aiPlaceholder">
@@ -92,10 +80,10 @@
                 </svg>
                 <p>Uruchom detekcję aby zobaczyć podgląd</p>
               </div>
-              <img id="aiLiveImg" style="display:none;width:100%;height:100%;object-fit:contain;background:#000" alt="Live detection"/>
+              <video id="aiLiveVideo" style="display:none;width:100%;height:100%;object-fit:contain;background:#000" muted playsinline></video>
+              <!-- Detection overlay chips — shown briefly when plate detected -->
+              <div class="ai-det-overlay" id="aiDetOverlay"></div>
             </div>
-            <!-- Live detections overlay list -->
-            <div class="ai-live-detections" id="aiLiveDetections"></div>
           </div>
 
           <!-- Right: plate log -->
@@ -140,7 +128,7 @@
       if (ai) sel.value = String(ai.id);
     } catch (_) {}
 
-    // Load initial status
+    // Load initial status (restores stream if already running)
     await refreshStatus();
 
     // Load plates
@@ -154,11 +142,6 @@
     document.getElementById('aiSettingsBtn').addEventListener('click', () => {
       document.getElementById('aiSettingsPanel').classList.toggle('hidden');
     });
-    document.getElementById('liveToggle').addEventListener('change', (e) => {
-      liveFrameActive = e.target.checked;
-      if (!liveFrameActive) document.getElementById('aiLiveImg').style.opacity = '.4';
-      else document.getElementById('aiLiveImg').style.opacity = '1';
-    });
     document.getElementById('plateRefreshBtn').addEventListener('click', () => loadPlates(true));
     document.getElementById('plateClearBtn').addEventListener('click', onClearPlates);
     document.getElementById('plateLoadMore').addEventListener('click', () => loadPlates(false));
@@ -171,9 +154,9 @@
     document.getElementById('plateDate').addEventListener('change', () => loadPlates(true));
 
     // Socket.io listeners
-    NVR.socket.on('lpr_frame',        onLprFrame);
     NVR.socket.on('lpr_plates_saved', onPlatesSaved);
     NVR.socket.on('lpr_status',       onLprStatus);
+    NVR.socket.on('stream_ready',     onStreamReady);
   }
 
   /* ----------------------------------------------------------
@@ -181,51 +164,58 @@
   ---------------------------------------------------------- */
   function cleanupAI() {
     if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
-    NVR.socket.off('lpr_frame',        onLprFrame);
     NVR.socket.off('lpr_plates_saved', onPlatesSaved);
     NVR.socket.off('lpr_status',       onLprStatus);
+    NVR.socket.off('stream_ready',     onStreamReady);
+    stopHlsPlayer();
+    if (activeCameraId !== null) {
+      NVR.socket.emit('stream_release', activeCameraId);
+      activeCameraId = null;
+    }
+  }
+
+  /* ----------------------------------------------------------
+     HLS stream helpers
+  ---------------------------------------------------------- */
+  function startHlsPlayer(cameraId) {
+    stopHlsPlayer();
+    activeCameraId = cameraId;
+    const video = document.getElementById('aiLiveVideo');
+    if (!video) return;
+    video.style.display = 'block';
+    const ph = document.getElementById('aiPlaceholder');
+    if (ph) ph.style.display = 'none';
+    hlsPlayer = NVR.createPlayer(video, cameraId);
+  }
+
+  function stopHlsPlayer() {
+    if (hlsPlayer) {
+      try { hlsPlayer.destroy(); } catch (_) {}
+      hlsPlayer = null;
+    }
+    const video = document.getElementById('aiLiveVideo');
+    if (video) { video.src = ''; video.style.display = 'none'; }
+    const ph = document.getElementById('aiPlaceholder');
+    if (ph) ph.style.display = 'flex';
+  }
+
+  function onStreamReady(cameraId) {
+    if (cameraId === activeCameraId) startHlsPlayer(cameraId);
   }
 
   /* ----------------------------------------------------------
      Socket.io handlers
   ---------------------------------------------------------- */
-  function onLprFrame(data) {
-    if (!liveFrameActive) return;
-    const img = document.getElementById('aiLiveImg');
-    const ph  = document.getElementById('aiPlaceholder');
-    if (!img) return;
-    if (data.frame) {
-      img.src = `data:image/jpeg;base64,${data.frame}`;
-      img.style.display = 'block';
-      if (ph) ph.style.display = 'none';
-    }
-    // Update inline detection chips
-    const det = document.getElementById('aiLiveDetections');
-    if (det) {
-      if (data.detections && data.detections.length > 0) {
-        det.innerHTML = data.detections.map(d => `
-          <div class="ai-det-chip">
-            <span class="ai-det-plate">${escHtml(d.text)}</span>
-            <span class="ai-det-conf">${Math.round(d.confidence * 100)}%</span>
-          </div>`).join('');
-      } else {
-        det.innerHTML = '';
-      }
-    }
-  }
-
   function onPlatesSaved(plates) {
     if (!Array.isArray(plates)) return;
     const body = document.getElementById('aiLogBody');
     if (!body) return;
-    // Prepend new plates at top
     const frag = document.createDocumentFragment();
-    plates.forEach(p => {
-      const row = buildPlateRow(p);
-      frag.appendChild(row);
-    });
+    plates.forEach(p => frag.appendChild(buildPlateRow(p)));
     body.insertBefore(frag, body.firstChild);
     refreshStats();
+    // Flash detection chips in the overlay
+    showDetectionOverlay(plates);
   }
 
   function onLprStatus(s) {
@@ -239,6 +229,28 @@
   }
 
   /* ----------------------------------------------------------
+     Detection overlay (shown briefly on video when plate found)
+  ---------------------------------------------------------- */
+  let overlayTimer = null;
+
+  function showDetectionOverlay(plates) {
+    const overlay = document.getElementById('aiDetOverlay');
+    if (!overlay) return;
+    clearTimeout(overlayTimer);
+    overlay.innerHTML = plates.map(p => {
+      const conf = Math.round((p.confidence || 0) * 100);
+      return `<div class="ai-det-chip">
+        <span class="ai-det-plate">${escHtml(p.plate_text)}</span>
+        <span class="ai-det-conf">${conf}%</span>
+      </div>`;
+    }).join('');
+    overlay.classList.add('visible');
+    overlayTimer = setTimeout(() => {
+      overlay.classList.remove('visible');
+    }, 4000);
+  }
+
+  /* ----------------------------------------------------------
      Status
   ---------------------------------------------------------- */
   async function refreshStatus() {
@@ -248,7 +260,12 @@
       updateStatusBadge(st.status);
       updateToggleBtn();
       updateStats(st.stats);
-      } catch (_) {}
+      // If already running, attach HLS stream
+      if (st.cameraId && ['connecting','connected','running','reconnecting'].includes(st.status)) {
+        activeCameraId = st.cameraId;
+        NVR.socket.emit('stream_request', st.cameraId);
+      }
+    } catch (_) {}
   }
 
   async function refreshStats() {
@@ -279,7 +296,7 @@
       ready:        { cls: 'connecting', label: 'Gotowy' }
     };
     const info = map[status] || map.stopped;
-    dot.className  = `status-dot ${info.cls}`;
+    dot.className    = `status-dot ${info.cls}`;
     text.textContent = info.label;
   }
 
@@ -304,12 +321,16 @@
         currentStatus = 'stopped';
         updateStatusBadge('stopped');
         updateToggleBtn();
+        stopHlsPlayer();
+        if (activeCameraId !== null) {
+          NVR.socket.emit('stream_release', activeCameraId);
+          activeCameraId = null;
+        }
       } catch (e) { NVR.toast('error', 'Błąd', e.message); }
       return;
     }
 
     const cameraId = document.getElementById('aiCameraSelect')?.value;
-    const interval = document.getElementById('aiInterval')?.value || '1';
     if (!cameraId) {
       document.getElementById('aiSettingsPanel').classList.remove('hidden');
       NVR.toast('warning', 'Brak kamery', 'Wybierz kamerę z listy');
@@ -317,11 +338,15 @@
     }
 
     try {
-      await NVR.api.post('/api/lpr/start', { cameraId: parseInt(cameraId), interval: parseFloat(interval) });
+      await NVR.api.post('/api/lpr/start', { cameraId: parseInt(cameraId) });
       currentStatus = 'initializing';
       updateStatusBadge('initializing');
       updateToggleBtn();
       NVR.toast('info', 'LPR', 'Uruchamianie detekcji...');
+
+      // Request HLS stream — onStreamReady will attach player when ready
+      activeCameraId = parseInt(cameraId);
+      NVR.socket.emit('stream_request', activeCameraId);
     } catch (e) { NVR.toast('error', 'Błąd', e.message); }
   }
 
@@ -365,9 +390,9 @@
   }
 
   function buildPlateRow(p) {
-    const conf   = Math.round((p.confidence || 0) * 100);
+    const conf    = Math.round((p.confidence || 0) * 100);
     const confCls = conf >= 80 ? 'conf-high' : conf >= 55 ? 'conf-mid' : 'conf-low';
-    const dt     = new Date(p.detected_at);
+    const dt      = new Date(p.detected_at);
     const dateStr = dt.toLocaleDateString('pl-PL');
     const timeStr = dt.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 

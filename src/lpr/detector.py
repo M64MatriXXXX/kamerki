@@ -10,7 +10,6 @@ import json
 import sys
 import time
 import re
-import base64
 import os
 
 # ── Suppress noisy logs ───────────────────────────────────────
@@ -158,7 +157,7 @@ def ocr_region(roi_bgr):
 
 # ── Main frame processing ─────────────────────────────────────
 def process_frame(frame):
-    """Detect plates, draw annotations, return (detections, annotated_jpeg_b64)."""
+    """Detect plates in frame, return list of detections (no frame encoding)."""
     regions = find_plate_regions(frame)
     detections = []
     seen = set()
@@ -179,30 +178,7 @@ def process_frame(frame):
                     'rect': [int(x1), int(y1), int(x2 - x1), int(y2 - y1)]
                 })
 
-    # Draw annotations
-    ann = frame.copy()
-    for det in detections:
-        x, y, w, h = det['rect']
-        # Bright green box
-        cv2.rectangle(ann, (x, y), (x + w, y + h), (0, 230, 0), 2)
-        label = f"{det['text']}  {det['confidence']:.0%}"
-        fs = 0.6
-        thick = 2
-        (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, fs, thick)
-        # Dark background for label
-        cv2.rectangle(ann, (x, y - th - baseline - 6), (x + tw + 8, y), (0, 0, 0), -1)
-        cv2.rectangle(ann, (x, y - th - baseline - 6), (x + tw + 8, y), (0, 230, 0), 1)
-        cv2.putText(ann, label, (x + 4, y - baseline - 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 230, 0), thick)
-
-    # Watermark
-    ts_str = time.strftime('%Y-%m-%d %H:%M:%S')
-    cv2.putText(ann, f'NVR AI  {ts_str}', (8, ann.shape[0] - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
-
-    _, buf = cv2.imencode('.jpg', ann, [cv2.IMWRITE_JPEG_QUALITY, 75])
-    b64 = base64.b64encode(buf.tobytes()).decode('ascii')
-    return detections, b64
+    return detections
 
 
 # ── Main loop ─────────────────────────────────────────────────
@@ -212,13 +188,13 @@ def main():
         sys.exit(1)
 
     rtsp_url = sys.argv[1]
-    interval  = float(sys.argv[2]) if len(sys.argv) > 2 else 1.5
 
     cap = None
-    last_proc = 0.0
     consecutive_fail = 0
     connect_attempts = 0
     MAX_CONNECT_ATTEMPTS = 10
+    last_heartbeat = 0.0
+    HEARTBEAT_SEC = 5.0
 
     while True:
         # (Re)open stream
@@ -242,9 +218,9 @@ def main():
                 continue
             _emit({'status': 'connected'})
             consecutive_fail = 0
-            connect_attempts = 0  # reset on successful connection
+            connect_attempts = 0
 
-        # Drain buffer — grab several frames, decode only the last
+        # Drain buffer: grab several frames so we always process a fresh one
         for _ in range(3):
             cap.grab()
         ret, frame = cap.retrieve()
@@ -263,27 +239,24 @@ def main():
         consecutive_fail = 0
         now = time.time()
 
-        if now - last_proc >= interval:
-            last_proc = now
-            # Resize to fixed width for consistent processing speed
-            h, w = frame.shape[:2]
-            target_w = 1280
-            if w > target_w:
-                scale = target_w / w
-                frame = cv2.resize(frame, (target_w, int(h * scale)),
-                                   interpolation=cv2.INTER_AREA)
-            try:
-                detections, frame_b64 = process_frame(frame)
-                _emit({
-                    'status': 'running',
-                    'ts': now,
-                    'detections': detections,
-                    'frame': frame_b64
-                })
-            except Exception as exc:
-                _emit({'status': 'error', 'msg': str(exc)})
+        # Resize for consistent processing speed
+        h, w = frame.shape[:2]
+        if w > 1280:
+            scale = 1280 / w
+            frame = cv2.resize(frame, (1280, int(h * scale)), interpolation=cv2.INTER_AREA)
 
-        time.sleep(0.04)
+        try:
+            detections = process_frame(frame)
+            if detections:
+                _emit({'status': 'running', 'ts': now, 'detections': detections})
+            elif now - last_heartbeat >= HEARTBEAT_SEC:
+                # Periodic heartbeat so Node.js knows detector is alive
+                _emit({'status': 'running', 'ts': now, 'detections': []})
+                last_heartbeat = now
+            else:
+                last_heartbeat = last_heartbeat  # keep as is
+        except Exception as exc:
+            _emit({'status': 'error', 'msg': str(exc)})
 
     if cap:
         cap.release()

@@ -1856,34 +1856,40 @@ body.sidebar-open .sidebar-backdrop { display: block; }
 }
 
 /* Live detection chips below image */
-.ai-live-detections {
+/* Detection overlay — positioned over the live video */
+.ai-det-overlay {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
   display: flex;
-  gap: 6px;
   flex-wrap: wrap;
-  padding: 6px 10px;
-  background: var(--card);
-  border-top: 1px solid var(--border-light);
-  min-height: 34px;
-  flex-shrink: 0;
+  gap: 6px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .3s ease;
+}
+.ai-det-overlay.visible {
+  opacity: 1;
 }
 
 .ai-det-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: rgba(0, 230, 0, .1);
-  border: 1px solid rgba(0, 230, 0, .35);
+  background: rgba(0, 0, 0, .72);
+  border: 1px solid rgba(0, 230, 0, .6);
   border-radius: 6px;
-  padding: 3px 8px;
+  padding: 4px 10px;
+  backdrop-filter: blur(4px);
   animation: fadeIn .25s ease;
 }
 
 .ai-det-plate {
   font-family: 'Courier New', monospace;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   color: #00e600;
-  letter-spacing: 1px;
+  letter-spacing: 1.5px;
 }
 
 .ai-det-conf {

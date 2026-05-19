@@ -30,8 +30,8 @@ router.post('/start', (req, res) => {
     const rtspPath = cam.rtsp_path || '';
     const rtspUrl = `rtsp://${auth}${cam.ip}:${cam.port || 554}${rtspPath}`;
 
-    lprManager.start(rtspUrl, parseFloat(interval) || 1.5);
-    res.json({ success: true, camera: cam.name });
+    lprManager.start(rtspUrl, parseInt(cameraId));
+    res.json({ success: true, camera: cam.name, cameraId: parseInt(cameraId) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

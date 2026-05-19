@@ -13,29 +13,28 @@ class LPRManager extends EventEmitter {
     super();
     this.proc       = null;
     this.running    = false;
-    this.status     = 'stopped';   // stopped|initializing|connecting|connected|running|error|reconnecting
+    this.status     = 'stopped';
     this.statusMsg  = '';
     this.rtspUrl    = null;
-    this.interval   = 1.5;
+    this.cameraId   = null;
     this.lastFrameTs = null;
     this._buf       = '';
   }
 
-  start(rtspUrl, intervalSec = 1.5) {
+  start(rtspUrl, cameraId = null) {
     if (this.running && this.rtspUrl === rtspUrl) return;
     if (this.running) this.stop();
 
     this.rtspUrl  = rtspUrl;
-    this.interval = intervalSec;
+    this.cameraId = cameraId;
     this.running  = true;
     this._buf     = '';
     this._setStatus('initializing', 'Starting detector...');
 
-    const args = ['python3', DETECTOR_PATH, rtspUrl, String(intervalSec)];
-    console.log(`[LPR] Spawning: ${args.join(' ')}`);
+    console.log(`[LPR] Spawning detector for camera ${cameraId}`);
 
     try {
-      this.proc = spawn('python3', [DETECTOR_PATH, rtspUrl, String(intervalSec)], {
+      this.proc = spawn('python3', [DETECTOR_PATH, rtspUrl], {
         stdio: ['ignore', 'pipe', 'pipe']
       });
     } catch (e) {
@@ -91,7 +90,7 @@ class LPRManager extends EventEmitter {
       status:      this.status,
       statusMsg:   this.statusMsg,
       rtspUrl:     this.rtspUrl,
-      interval:    this.interval,
+      cameraId:    this.cameraId,
       lastFrameTs: this.lastFrameTs
     };
   }
