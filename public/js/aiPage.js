@@ -266,10 +266,11 @@
       updateStatusBadge(st.status);
       updateToggleBtn();
       updateStats(st.stats);
-      // If already running, attach HLS stream
+      // If already running, attach HLS stream immediately
       if (st.cameraId && ['connecting','connected','running','reconnecting'].includes(st.status)) {
         activeCameraId = st.cameraId;
         NVR.socket.emit('watch_camera', st.cameraId);
+        startHlsPlayer(st.cameraId);
       }
     } catch (_) {}
   }
@@ -350,9 +351,10 @@
       updateToggleBtn();
       NVR.toast('info', 'LPR', 'Uruchamianie detekcji...');
 
-      // Request HLS stream — onStreamReady will attach player when ready
+      // Start HLS stream immediately — hls.js will retry until manifest is ready
       activeCameraId = parseInt(cameraId);
       NVR.socket.emit('watch_camera', activeCameraId);
+      startHlsPlayer(activeCameraId);
     } catch (e) { NVR.toast('error', 'Błąd', e.message); }
   }
 
