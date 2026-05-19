@@ -44,9 +44,14 @@ def is_valid_plate(text: str) -> bool:
         return False
     if not _PLATE_RE.match(t):
         return False
+    # Must start with exactly 2-3 letters (district code)
     if not re.match(r'^[A-Z]{2}', t):
         return False
-    if not any(c.isdigit() for c in t):
+    # Must contain at least 2 digits (real plates always have multiple digits)
+    if sum(c.isdigit() for c in t) < 2:
+        return False
+    # Reject if more than 5 consecutive letters (watermark text, not a plate)
+    if re.search(r'[A-Z]{6,}', t):
         return False
     return True
 
@@ -55,6 +60,11 @@ def is_valid_plate(text: str) -> bool:
 def find_plate_regions(frame):
     """Return list of (x1,y1,x2,y2) candidate bounding boxes. Very fast (~5 ms)."""
     h, w = frame.shape[:2]
+
+    # Ignore bottom 12% and top 4% — watermark/timestamp zones
+    y_min = int(h * 0.04)
+    y_max = int(h * 0.88)
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blur = cv2.bilateralFilter(gray, 9, 15, 15)
     edges = cv2.Canny(blur, 30, 180)
@@ -84,6 +94,9 @@ def find_plate_regions(frame):
         y1 = max(0, y - pad_y)
         x2 = min(w, x + cw + pad_x)
         y2 = min(h, y + ch + pad_y)
+        # Skip watermark zones at top and bottom of frame
+        if y1 < y_min or y2 > y_max:
+            continue
         candidates.append((x1, y1, x2, y2))
 
     return _nms_boxes(candidates)
@@ -248,7 +261,7 @@ def main():
                     raw = re.sub(r'[^A-Z0-9]', '', text.upper())
                     if not raw or raw in seen:
                         continue
-                    if is_valid_plate(raw) and conf >= 0.45:
+                    if is_valid_plate(raw) and conf >= 0.60:
                         seen.add(raw)
                         detections.append({
                             'text':       raw,
