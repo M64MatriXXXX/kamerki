@@ -27,10 +27,12 @@
     if (!initialized) {
       createMap();
       initialized = true;
+      // Delay invalidateSize so the browser finishes layout (incl. bottom nav)
+      requestAnimationFrame(() => setTimeout(() => map && map.invalidateSize(), 50));
     } else {
       // Re-insert map into DOM
       document.getElementById('leafletMap').appendChild(map.getContainer());
-      map.invalidateSize();
+      requestAnimationFrame(() => map.invalidateSize());
     }
 
     placeMarkers();
