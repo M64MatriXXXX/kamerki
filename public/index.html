@@ -50,6 +50,15 @@
         </svg>
         <span>Settings</span>
       </a>
+      <a href="#ai" class="nav-item" data-page="ai">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2"/>
+          <path d="M8 21h8M12 17v4"/>
+          <circle cx="8.5" cy="9.5" r="1.5" fill="currentColor" stroke="none"/>
+          <path d="M6 13l2.5-2.5L11 13l4-5 3 4"/>
+        </svg>
+        <span>AI / LPR</span>
+      </a>
       <a href="#admin" class="nav-item nav-admin" data-page="admin" style="display:none">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -100,6 +109,7 @@
     <div class="page" id="page-cameras"></div>
     <div class="page" id="page-map"></div>
     <div class="page" id="page-settings"></div>
+    <div class="page" id="page-ai"></div>
     <div class="page" id="page-admin"></div>
   </main>
 
@@ -211,6 +221,15 @@
       </svg>
       <span>Ustawienia</span>
     </a>
+    <a class="bottom-nav-item" data-page="ai" href="#ai">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="3" width="20" height="14" rx="2"/>
+        <path d="M8 21h8M12 17v4"/>
+        <circle cx="8.5" cy="9.5" r="1.5" fill="currentColor" stroke="none"/>
+        <path d="M6 13l2.5-2.5L11 13l4-5 3 4"/>
+      </svg>
+      <span>AI</span>
+    </a>
     <a class="bottom-nav-item nav-admin" data-page="admin" href="#admin" style="display:none">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -230,5 +249,6 @@
   <script src="/js/mapView.js"></script>
   <script src="/js/ptzControl.js"></script>
   <script src="/js/admin.js"></script>
+  <script src="/js/aiPage.js"></script>
 </body>
 </html>

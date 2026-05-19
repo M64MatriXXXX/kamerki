@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 
 const streamManager = require('./src/streamManager');
+const lprManager    = require('./src/lprManager');
 const db = require('./src/database');
 const {
   sessionMiddleware, requireAuth, requirePermission,
@@ -61,6 +62,9 @@ app.use('/api', requireAuth);
 
 // Camera routes
 app.use('/api/cameras', require('./src/routes/cameras'));
+
+// LPR routes
+app.use('/api/lpr', require('./src/routes/lpr'));
 const streamRouter = require('./src/routes/streams');
 const ptzRouter    = require('./src/routes/ptz');
 app.use('/api/cameras/:id/stream', streamRouter);
@@ -200,6 +204,11 @@ streamManager.on('stream_ready',   (id)      => { io.emit('stream_ready', id); i
 streamManager.on('stream_error',   (id, err) => { io.emit('stream_error', id, err); io.emit('camera_status', id, 'error'); });
 streamManager.on('stream_stopped', (id)      => { io.emit('camera_status', id, 'stopped'); });
 
+// LPR manager events → broadcast (only to AI page viewers)
+lprManager.on('frame',        (data)   => io.emit('lpr_frame', data));
+lprManager.on('plates_saved', (plates) => io.emit('lpr_plates_saved', plates));
+lprManager.on('status',       (s)      => io.emit('lpr_status', s));
+
 // Init
 fs.mkdirSync(HLS_DIR, { recursive: true });
 
@@ -214,6 +223,7 @@ process.on('SIGINT',  shutdown);
 function shutdown() {
   console.log('[NVR] Shutting down...');
   streamManager.shutdown();
+  lprManager.stop();
   db.closeDb();
   server.close(() => { console.log('[NVR] Server closed'); process.exit(0); });
   setTimeout(() => process.exit(1), 5000);

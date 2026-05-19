@@ -87,6 +87,16 @@ function initSchema() {
       details TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS license_plates (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      plate_text  TEXT NOT NULL,
+      confidence  REAL NOT NULL DEFAULT 0,
+      detected_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_plates_text ON license_plates(plate_text);
+    CREATE INDEX IF NOT EXISTS idx_plates_ts   ON license_plates(detected_at);
   `);
 
   // Seed default admin (password: admin1234, must change on first login)
@@ -295,6 +305,59 @@ function sessionDestroyAll() {
   getDb().prepare('DELETE FROM sessions').run();
 }
 
+// ── License Plates (circular buffer, max 10 000 rows) ────────
+const MAX_PLATES = 10000;
+const TRIM_BATCH = 200;   // delete this many oldest when limit reached
+
+function saveLicensePlate({ plate_text, confidence, detected_at }) {
+  const d = getDb();
+  const count = d.prepare('SELECT COUNT(*) as c FROM license_plates').get().c;
+  if (count >= MAX_PLATES) {
+    d.prepare(
+      'DELETE FROM license_plates WHERE id IN (SELECT id FROM license_plates ORDER BY id ASC LIMIT ?)'
+    ).run(TRIM_BATCH);
+  }
+  const r = d.prepare(
+    'INSERT INTO license_plates (plate_text, confidence, detected_at) VALUES (?, ?, ?)'
+  ).run(plate_text, confidence || 0, detected_at);
+  return { id: r.lastInsertRowid, plate_text, confidence, detected_at };
+}
+
+function getRecentPlate(plate_text, seconds) {
+  const since = new Date(Date.now() - seconds * 1000).toISOString();
+  return getDb().prepare(
+    'SELECT id FROM license_plates WHERE plate_text = ? AND detected_at > ? ORDER BY id DESC LIMIT 1'
+  ).get(plate_text, since);
+}
+
+function getLicensePlates({ limit = 100, offset = 0, search = '', date = '' } = {}) {
+  const d = getDb();
+  let q = 'SELECT * FROM license_plates WHERE 1=1';
+  const params = [];
+  if (search) { q += ' AND plate_text LIKE ?';   params.push(`%${search}%`); }
+  if (date)   { q += ' AND detected_at LIKE ?';  params.push(`${date}%`); }
+  q += ' ORDER BY detected_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+  return d.prepare(q).all(...params);
+}
+
+function getLicensePlateStats() {
+  const d = getDb();
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    total:  d.prepare('SELECT COUNT(*) as c FROM license_plates').get().c,
+    today:  d.prepare('SELECT COUNT(*) as c FROM license_plates WHERE detected_at LIKE ?').get(`${today}%`).c,
+    unique: d.prepare('SELECT COUNT(DISTINCT plate_text) as c FROM license_plates').get().c,
+    max:    MAX_PLATES
+  };
+}
+
+function clearLicensePlates() {
+  const d = getDb();
+  d.prepare('DELETE FROM license_plates').run();
+  d.prepare("DELETE FROM sqlite_sequence WHERE name='license_plates'").run();
+}
+
 function closeDb() {
   if (db) {
     db.close();
@@ -312,5 +375,6 @@ module.exports = {
   updateUserPassword, updateLoginAttempts, updateLastLogin, deleteUser,
   createAuditLog, getAuditLogs,
   sessionGet, sessionSet, sessionDestroy, sessionCleanup, sessionGetAll, sessionDestroyAll,
+  saveLicensePlate, getRecentPlate, getLicensePlates, getLicensePlateStats, clearLicensePlates,
   closeDb
 };

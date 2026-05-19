@@ -20,6 +20,7 @@ const PAGE_TITLES_MAP = {
   cameras:   'Cameras',
   map:       'Map View',
   settings:  'Settings',
+  ai:        'AI — Rozpoznawanie tablic',
   admin:     'Panel Administratora'
 };
 
@@ -329,6 +330,12 @@ const PAGE_TITLES = PAGE_TITLES_MAP;
 
 function navigateTo(page) {
   if (!PAGE_TITLES[page]) page = 'dashboard';
+
+  // Run cleanup for current page before leaving
+  const prevPage = NVR.currentPage;
+  if (prevPage && prevPage !== page && NVR.pagesCleanup && NVR.pagesCleanup[prevPage]) {
+    try { NVR.pagesCleanup[prevPage](); } catch (_) {}
+  }
 
   // Update desktop nav
   document.querySelectorAll('.nav-item').forEach(el => {
