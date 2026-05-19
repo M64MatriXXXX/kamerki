@@ -312,17 +312,22 @@
         </div>
         <span style="margin-top:8px;font-size:12px;opacity:.7">Kliknij aby oglądać</span>`;
       overlay.style.cursor = 'pointer';
+      overlay.style.pointerEvents = 'auto';
 
       const lazyStart = (e) => {
         e.stopPropagation();
         overlay.style.cursor = '';
+        overlay.style.pointerEvents = '';
         overlay.innerHTML = '<div class="spinner"></div><span>Łączenie...</span>';
         overlay.removeEventListener('click', lazyStart);
         startTileStream(cam, tile);
       };
       overlay.addEventListener('click', lazyStart);
 
-      tileCleanups.push(() => overlay.removeEventListener('click', lazyStart));
+      tileCleanups.push(() => {
+        overlay.style.pointerEvents = '';
+        overlay.removeEventListener('click', lazyStart);
+      });
     } else {
       startTileStream(cam, tile);
     }
