@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
 NVR Pro — License Plate Recognition detector.
-Reads RTSP stream, detects plates, outputs JSON lines to stdout.
-Usage: python3 detector.py <rtsp_url> [interval_sec]
+Two-threaded pipeline:
+  Thread 1 (reader)  — reads RTSP frames, runs fast OpenCV plate-region detector,
+                       pushes candidate (frame, regions) into a queue.
+  Thread 2 (main)    — pops from queue, runs EasyOCR on each region, emits JSON.
+Usage: python3 detector.py <rtsp_url>
 """
 import cv2
 import numpy as np
@@ -11,8 +14,9 @@ import sys
 import time
 import re
 import os
+import threading
+import queue
 
-# ── Suppress noisy logs ───────────────────────────────────────
 os.environ.setdefault('EASYOCR_MODULE_PATH', os.path.expanduser('~/.EasyOCR'))
 import warnings
 warnings.filterwarnings('ignore')
@@ -25,7 +29,6 @@ _emit({'status': 'initializing', 'msg': 'Loading EasyOCR model (first run may ta
 try:
     import easyocr
     reader = easyocr.Reader(['pl', 'en'], gpu=False, verbose=False, download_enabled=True)
-    OCR_ENGINE = 'easyocr'
     _emit({'status': 'ready', 'engine': 'easyocr'})
 except Exception as e:
     _emit({'status': 'error', 'msg': f'Failed to load EasyOCR: {e}'})
@@ -33,16 +36,7 @@ except Exception as e:
 
 
 # ── Plate validation ──────────────────────────────────────────
-# Polish plate patterns (after stripping spaces/dashes):
-# Standard passenger: 2-3 letters + 4-5 alphanumeric  e.g. WA12345, KR1X234
-# Total cleaned length: 5-8 chars
 _PLATE_RE = re.compile(r'^[A-Z]{1,3}[A-Z0-9]{4,5}$')
-
-def clean_text(text: str) -> str:
-    # Common OCR substitutions for plates
-    t = text.upper()
-    t = t.replace('O', '0').replace('I', '1').replace('S', '5')  # context-sensitive
-    return re.sub(r'[^A-Z0-9]', '', t)
 
 def is_valid_plate(text: str) -> bool:
     t = re.sub(r'[^A-Z0-9]', '', text.upper())
@@ -50,36 +44,29 @@ def is_valid_plate(text: str) -> bool:
         return False
     if not _PLATE_RE.match(t):
         return False
-    # Must start with at least 2 letters (district code)
     if not re.match(r'^[A-Z]{2}', t):
         return False
-    # Must contain at least one digit
     if not any(c.isdigit() for c in t):
         return False
     return True
 
 
-# ── Plate region detection ────────────────────────────────────
+# ── Fast plate region detector (OpenCV only, no OCR) ─────────
 def find_plate_regions(frame):
-    """Return list of (x1,y1,x2,y2) candidate plate bounding boxes."""
+    """Return list of (x1,y1,x2,y2) candidate bounding boxes. Very fast (~5 ms)."""
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # Denoise + edge detect
     blur = cv2.bilateralFilter(gray, 9, 15, 15)
     edges = cv2.Canny(blur, 30, 180)
-
-    # Close gaps so plate rectangle forms solid contour
     kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 3))
     kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 5))
     closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_h)
     closed = cv2.morphologyEx(closed, cv2.MORPH_CLOSE, kernel_v)
-
     contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     candidates = []
-    min_area = (w * h) * 0.0008   # at least 0.08% of frame area
-    max_area = (w * h) * 0.15     # at most 15% of frame area
+    min_area = (w * h) * 0.0008
+    max_area = (w * h) * 0.15
 
     for cnt in contours:
         x, y, cw, ch = cv2.boundingRect(cnt)
@@ -87,13 +74,10 @@ def find_plate_regions(frame):
         if area < min_area or area > max_area:
             continue
         ratio = cw / max(ch, 1)
-        # Typical plate: 2.5:1 to 6:1 aspect ratio
         if not (2.2 <= ratio <= 7.0):
             continue
-        # Absolute minimums
         if cw < 60 or ch < 12:
             continue
-        # Expand by ~8% each side
         pad_x = max(6, int(cw * 0.06))
         pad_y = max(4, int(ch * 0.12))
         x1 = max(0, x - pad_x)
@@ -102,7 +86,6 @@ def find_plate_regions(frame):
         y2 = min(h, y + ch + pad_y)
         candidates.append((x1, y1, x2, y2))
 
-    # Deduplicate heavily overlapping candidates
     return _nms_boxes(candidates)
 
 
@@ -134,17 +117,14 @@ def _nms_boxes(boxes, iou_thresh=0.4):
     return kept
 
 
-# ── OCR on region ─────────────────────────────────────────────
+# ── OCR on a single candidate region ─────────────────────────
 def ocr_region(roi_bgr):
-    """Return list of (text, confidence) from EasyOCR."""
-    # Pre-process: upscale + sharpen + threshold
     h, w = roi_bgr.shape[:2]
     scale = max(1, min(4, int(120 / max(h, 1))))
     up = cv2.resize(roi_bgr, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
     gray = cv2.cvtColor(up, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     img3 = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-
     results = reader.readtext(
         img3,
         detail=1,
@@ -155,57 +135,31 @@ def ocr_region(roi_bgr):
     return [(text, float(conf)) for (_, text, conf) in results]
 
 
-# ── Main frame processing ─────────────────────────────────────
-def process_frame(frame):
-    """Detect plates in frame, return list of detections (no frame encoding)."""
-    regions = find_plate_regions(frame)
-    detections = []
-    seen = set()
-
-    for (x1, y1, x2, y2) in regions:
-        roi = frame[y1:y2, x1:x2]
-        if roi.size == 0:
-            continue
-        for (text, conf) in ocr_region(roi):
-            raw = re.sub(r'[^A-Z0-9]', '', text.upper())
-            if not raw or raw in seen:
-                continue
-            if is_valid_plate(raw) and conf >= 0.45:
-                seen.add(raw)
-                detections.append({
-                    'text': raw,
-                    'confidence': round(conf, 3),
-                    'rect': [int(x1), int(y1), int(x2 - x1), int(y2 - y1)]
-                })
-
-    return detections
-
-
-# ── Main loop ─────────────────────────────────────────────────
-def main():
-    if len(sys.argv) < 2:
-        _emit({'status': 'error', 'msg': 'Usage: detector.py <rtsp_url> [interval_sec]'})
-        sys.exit(1)
-
-    rtsp_url = sys.argv[1]
-
+# ── Thread 1: RTSP reader + fast region detector ─────────────
+def reader_thread(rtsp_url, ocr_queue, stop_event):
+    """
+    Continuously reads frames, runs fast OpenCV detector.
+    Pushes (frame, regions) into ocr_queue only when plate candidates found.
+    Queue is bounded (maxsize=2) so OCR thread always gets a fresh frame;
+    old unprocessed frames are dropped automatically.
+    """
     cap = None
     consecutive_fail = 0
     connect_attempts = 0
     MAX_CONNECT_ATTEMPTS = 10
-    last_heartbeat = 0.0
-    HEARTBEAT_SEC = 5.0
 
-    while True:
-        # (Re)open stream
+    while not stop_event.is_set():
         if cap is None or not cap.isOpened():
             connect_attempts += 1
             if connect_attempts > MAX_CONNECT_ATTEMPTS:
-                _emit({'status': 'error', 'msg': f'Stream unavailable after {MAX_CONNECT_ATTEMPTS} attempts, giving up'})
-                sys.exit(1)
+                _emit({'status': 'error',
+                       'msg': f'Stream unavailable after {MAX_CONNECT_ATTEMPTS} attempts'})
+                stop_event.set()
+                break
 
             backoff = min(30, 3 * connect_attempts)
-            _emit({'status': 'connecting', 'msg': f'Attempt {connect_attempts}/{MAX_CONNECT_ATTEMPTS}'})
+            _emit({'status': 'connecting',
+                   'msg': f'Attempt {connect_attempts}/{MAX_CONNECT_ATTEMPTS}'})
             cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
             cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 8000)
@@ -213,19 +167,17 @@ def main():
             if not cap.isOpened():
                 cap.release()
                 cap = None
-                _emit({'status': 'error', 'msg': f'Cannot open RTSP stream (attempt {connect_attempts})'})
+                _emit({'status': 'error',
+                       'msg': f'Cannot open RTSP stream (attempt {connect_attempts})'})
                 time.sleep(backoff)
                 continue
             _emit({'status': 'connected'})
             consecutive_fail = 0
             connect_attempts = 0
 
-        # Drain buffer: grab several frames so we always process a fresh one
-        for _ in range(3):
-            cap.grab()
-        ret, frame = cap.retrieve()
-        if not ret:
-            ret, frame = cap.read()
+        # Always grab to drain buffer, decode only the latest frame
+        cap.grab()
+        ret, frame = cap.read()
 
         if not ret or frame is None:
             consecutive_fail += 1
@@ -237,29 +189,82 @@ def main():
             continue
 
         consecutive_fail = 0
-        now = time.time()
 
-        # Resize for consistent processing speed
+        # Resize for speed
         h, w = frame.shape[:2]
         if w > 1280:
             scale = 1280 / w
             frame = cv2.resize(frame, (1280, int(h * scale)), interpolation=cv2.INTER_AREA)
 
-        try:
-            detections = process_frame(frame)
-            if detections:
-                _emit({'status': 'running', 'ts': now, 'detections': detections})
-            elif now - last_heartbeat >= HEARTBEAT_SEC:
-                # Periodic heartbeat so Node.js knows detector is alive
-                _emit({'status': 'running', 'ts': now, 'detections': []})
-                last_heartbeat = now
-            else:
-                last_heartbeat = last_heartbeat  # keep as is
-        except Exception as exc:
-            _emit({'status': 'error', 'msg': str(exc)})
+        # Fast plate region check — only send to OCR if candidates found
+        regions = find_plate_regions(frame)
+        if regions:
+            try:
+                # Non-blocking put; drop if OCR is still busy (car will likely still be in next frame)
+                ocr_queue.put_nowait((frame, regions, time.time()))
+            except queue.Full:
+                pass  # OCR busy, skip this frame — next one coming shortly
 
     if cap:
         cap.release()
+
+
+# ── Main / Thread 2: EasyOCR processor ───────────────────────
+def main():
+    if len(sys.argv) < 2:
+        _emit({'status': 'error', 'msg': 'Usage: detector.py <rtsp_url>'})
+        sys.exit(1)
+
+    rtsp_url = sys.argv[1]
+
+    # Queue size 3: reader can queue up to 3 frames ahead of OCR
+    ocr_queue = queue.Queue(maxsize=3)
+    stop_event = threading.Event()
+
+    t = threading.Thread(target=reader_thread, args=(rtsp_url, ocr_queue, stop_event), daemon=True)
+    t.start()
+
+    last_heartbeat = 0.0
+    HEARTBEAT_SEC  = 5.0
+
+    while not stop_event.is_set():
+        try:
+            frame, regions, ts = ocr_queue.get(timeout=HEARTBEAT_SEC)
+        except queue.Empty:
+            # No plate candidates seen for HEARTBEAT_SEC seconds — emit heartbeat
+            _emit({'status': 'running', 'ts': time.time(), 'detections': []})
+            last_heartbeat = time.time()
+            continue
+
+        detections = []
+        seen = set()
+
+        for (x1, y1, x2, y2) in regions:
+            roi = frame[y1:y2, x1:x2]
+            if roi.size == 0:
+                continue
+            try:
+                for (text, conf) in ocr_region(roi):
+                    raw = re.sub(r'[^A-Z0-9]', '', text.upper())
+                    if not raw or raw in seen:
+                        continue
+                    if is_valid_plate(raw) and conf >= 0.45:
+                        seen.add(raw)
+                        detections.append({
+                            'text':       raw,
+                            'confidence': round(conf, 3),
+                            'rect':       [int(x1), int(y1), int(x2-x1), int(y2-y1)]
+                        })
+            except Exception as exc:
+                _emit({'status': 'error', 'msg': str(exc)})
+
+        now = time.time()
+        if detections:
+            _emit({'status': 'running', 'ts': ts, 'detections': detections})
+            last_heartbeat = now
+        elif now - last_heartbeat >= HEARTBEAT_SEC:
+            _emit({'status': 'running', 'ts': now, 'detections': []})
+            last_heartbeat = now
 
 
 if __name__ == '__main__':
