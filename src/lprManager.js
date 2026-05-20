@@ -1,24 +1,39 @@
 'use strict';
 
-const { spawn }      = require('child_process');
-const path           = require('path');
-const EventEmitter   = require('events');
-const db             = require('./database');
+const { spawn }    = require('child_process');
+const path         = require('path');
+const EventEmitter = require('events');
+const db           = require('./database');
 
 const DETECTOR_PATH  = path.join(__dirname, 'lpr', 'detector.py');
-const DEDUPE_SECONDS = 60;   // don't re-record same plate within this window
+const DEDUPE_MS      = 5 * 60 * 1000;  // 5 minutes — same physical car window
+const FUZZY_DIST     = 2;              // Levenshtein ≤ 2 → treat as same plate
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) => [i]);
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1]
+        ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
 
 class LPRManager extends EventEmitter {
   constructor() {
     super();
-    this.proc       = null;
-    this.running    = false;
-    this.status     = 'stopped';
-    this.statusMsg  = '';
-    this.rtspUrl    = null;
-    this.cameraId   = null;
+    this.proc        = null;
+    this.running     = false;
+    this.status      = 'stopped';
+    this.statusMsg   = '';
+    this.rtspUrl     = null;
+    this.cameraId    = null;
     this.lastFrameTs = null;
-    this._buf       = '';
+    this._buf        = '';
+    // In-memory recent plates cache: text → {confidence, ts}
+    this._recentPlates = new Map();
   }
 
   start(rtspUrl, cameraId = null) {
@@ -29,6 +44,7 @@ class LPRManager extends EventEmitter {
     this.cameraId = cameraId;
     this.running  = true;
     this._buf     = '';
+    this._recentPlates.clear();
     this._setStatus('initializing', 'Starting detector...');
 
     console.log(`[LPR] Spawning detector for camera ${cameraId}`);
@@ -63,7 +79,6 @@ class LPRManager extends EventEmitter {
       this.running = false;
       this.proc    = null;
       this._setStatus('stopped', `Process exited (code ${code})`);
-      console.log(`[LPR] Process exited code=${code}`);
     });
 
     this.proc.on('error', (e) => {
@@ -81,6 +96,7 @@ class LPRManager extends EventEmitter {
       this.proc = null;
     }
     this.running = false;
+    this._recentPlates.clear();
     this._setStatus('stopped');
   }
 
@@ -101,8 +117,20 @@ class LPRManager extends EventEmitter {
     this.emit('status', { status, msg });
   }
 
+  // Returns the cached plate text that fuzzy-matches, or null
+  _fuzzyMatch(text) {
+    const now = Date.now();
+    for (const [cached, entry] of this._recentPlates) {
+      if (now - entry.ts > DEDUPE_MS) {
+        this._recentPlates.delete(cached);
+        continue;
+      }
+      if (levenshtein(text, cached) <= FUZZY_DIST) return cached;
+    }
+    return null;
+  }
+
   _handleMsg(msg) {
-    // Status updates
     if (msg.status) {
       const s = msg.status;
       if (['initializing','connecting','connected','running','error','reconnecting','ready'].includes(s)) {
@@ -110,31 +138,31 @@ class LPRManager extends EventEmitter {
       }
     }
 
-    // Annotated frame
-    if (msg.frame) {
-      this.lastFrameTs = new Date().toISOString();
-      this.emit('frame', {
-        frame:      msg.frame,
-        detections: msg.detections || [],
-        ts:         msg.ts || Date.now() / 1000
-      });
-    }
-
-    // Save new plates (with deduplication)
     if (Array.isArray(msg.detections) && msg.detections.length > 0) {
       const saved = [];
       for (const det of msg.detections) {
         if (!det.text) continue;
         try {
-          const recent = db.getRecentPlate(det.text, DEDUPE_SECONDS);
-          if (!recent) {
-            const rec = db.saveLicensePlate({
-              plate_text:  det.text,
-              confidence:  det.confidence,
-              detected_at: new Date().toISOString()
-            });
-            saved.push(rec);
+          // Fuzzy in-memory check first (fast, catches variants like NEL vs EL)
+          const match = this._fuzzyMatch(det.text);
+          if (match) {
+            // Update timestamp so the window extends while car is still in view
+            const entry = this._recentPlates.get(match);
+            if (entry && det.confidence > entry.confidence) {
+              // Better reading — update cache but don't save again to DB
+              this._recentPlates.set(match, { confidence: det.confidence, ts: entry.ts });
+            }
+            continue;
           }
+
+          // New unique plate — save to DB
+          const rec = db.saveLicensePlate({
+            plate_text:  det.text,
+            confidence:  det.confidence,
+            detected_at: new Date().toISOString()
+          });
+          this._recentPlates.set(det.text, { confidence: det.confidence, ts: Date.now() });
+          saved.push(rec);
         } catch (e) {
           console.error('[LPR] DB error:', e.message);
         }
