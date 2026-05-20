@@ -138,6 +138,16 @@ class LPRManager extends EventEmitter {
       }
     }
 
+    // Annotated frame — forward to clients for live AI view
+    if (msg.frame) {
+      this.lastFrameTs = new Date().toISOString();
+      this.emit('frame', {
+        frame:      msg.frame,
+        detections: msg.detections || [],
+        ts:         msg.ts || Date.now() / 1000
+      });
+    }
+
     if (Array.isArray(msg.detections) && msg.detections.length > 0) {
       const saved = [];
       for (const det of msg.detections) {

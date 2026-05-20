@@ -5,20 +5,16 @@
    ============================================================ */
 (function () {
 
-  let currentStatus  = 'stopped';
-  let statsInterval  = null;
-  let plateOffset    = 0;
-  let hlsPlayer      = null;
-  let activeCameraId = null;
-  const PAGE_SIZE    = 50;
+  let currentStatus = 'stopped';
+  let statsInterval = null;
+  let plateOffset   = 0;
+  const PAGE_SIZE   = 50;
 
   /* ----------------------------------------------------------
      Init
   ---------------------------------------------------------- */
   async function initAI() {
     const page = document.getElementById('page-ai');
-    page.innerHTML = '';
-
     page.innerHTML = `
       <div class="ai-wrap">
 
@@ -30,7 +26,6 @@
             <div class="ai-stat"><span class="ai-stat-val" id="statUnique">—</span><span class="ai-stat-lbl">Unikalne</span></div>
             <div class="ai-stat"><span class="ai-stat-val" id="statMax" style="color:var(--text-dim)">/ 10 000</span><span class="ai-stat-lbl">Limit</span></div>
           </div>
-
           <div class="ai-controls">
             <div class="ai-status-badge" id="aiStatusBadge">
               <span class="status-dot offline"></span>
@@ -65,10 +60,11 @@
         <!-- Main 2-panel layout -->
         <div class="ai-body">
 
-          <!-- Left: live detection view -->
+          <!-- Left: annotated AI live view -->
           <div class="ai-live-panel">
             <div class="ai-panel-header">
-              <span class="ai-panel-title">Podgląd na żywo</span>
+              <span class="ai-panel-title">Podgląd AI</span>
+              <span class="ai-fps-badge" id="aiFpsBadge" style="font-size:11px;color:var(--text-dim)"></span>
             </div>
             <div class="ai-live-view" id="aiLiveView">
               <div class="ai-placeholder" id="aiPlaceholder">
@@ -80,9 +76,7 @@
                 </svg>
                 <p>Uruchom detekcję aby zobaczyć podgląd</p>
               </div>
-              <video id="aiLiveVideo" style="display:none;width:100%;height:100%;object-fit:contain;background:#000" muted playsinline></video>
-              <!-- Detection overlay chips — shown briefly when plate detected -->
-              <div class="ai-det-overlay" id="aiDetOverlay"></div>
+              <img id="aiLiveImg" style="display:none;width:100%;height:100%;object-fit:contain;background:#000" alt="AI detection view"/>
             </div>
           </div>
 
@@ -122,22 +116,14 @@
         opt.textContent = `${c.name} (${c.ip})`;
         sel.appendChild(opt);
       });
-
-      // Pre-select camera 172.26.64.19 if present
       const ai = cameras.find(c => c.ip === '172.26.64.19');
       if (ai) sel.value = String(ai.id);
     } catch (_) {}
 
-    // Load initial status (restores stream if already running)
     await refreshStatus();
-
-    // Load plates
     loadPlates(true);
-
-    // Stats auto-refresh every 30s
     statsInterval = setInterval(refreshStats, 30000);
 
-    // Wire buttons
     document.getElementById('aiToggleBtn').addEventListener('click', onToggle);
     document.getElementById('aiSettingsBtn').addEventListener('click', () => {
       document.getElementById('aiSettingsPanel').classList.toggle('hidden');
@@ -153,65 +139,48 @@
     });
     document.getElementById('plateDate').addEventListener('change', () => loadPlates(true));
 
-    // Socket.io listeners
+    NVR.socket.on('lpr_frame',        onLprFrame);
     NVR.socket.on('lpr_plates_saved', onPlatesSaved);
     NVR.socket.on('lpr_status',       onLprStatus);
-    NVR.socket.on('stream_ready',     onStreamReady);
-    NVR.socket.on('stream_starting',  onStreamStarting);
   }
 
   /* ----------------------------------------------------------
-     Cleanup when leaving page
+     Cleanup
   ---------------------------------------------------------- */
   function cleanupAI() {
     if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+    NVR.socket.off('lpr_frame',        onLprFrame);
     NVR.socket.off('lpr_plates_saved', onPlatesSaved);
     NVR.socket.off('lpr_status',       onLprStatus);
-    NVR.socket.off('stream_ready',     onStreamReady);
-    NVR.socket.off('stream_starting',  onStreamStarting);
-    stopHlsPlayer();
-    if (activeCameraId !== null) {
-      NVR.socket.emit('unwatch_camera', activeCameraId);
-      activeCameraId = null;
-    }
   }
 
   /* ----------------------------------------------------------
-     HLS stream helpers
+     Socket handlers
   ---------------------------------------------------------- */
-  function startHlsPlayer(cameraId) {
-    stopHlsPlayer();
-    activeCameraId = cameraId;
-    const video = document.getElementById('aiLiveVideo');
-    if (!video) return;
-    video.style.display = 'block';
-    const ph = document.getElementById('aiPlaceholder');
-    if (ph) ph.style.display = 'none';
-    hlsPlayer = NVR.createPlayer(video, cameraId);
-  }
+  let _lastFrameTs = 0;
 
-  function stopHlsPlayer() {
-    if (hlsPlayer) {
-      try { hlsPlayer.destroy(); } catch (_) {}
-      hlsPlayer = null;
+  function onLprFrame(data) {
+    const img = document.getElementById('aiLiveImg');
+    const ph  = document.getElementById('aiPlaceholder');
+    if (!img) return;
+
+    if (data.frame) {
+      img.src = `data:image/jpeg;base64,${data.frame}`;
+      if (img.style.display === 'none') {
+        img.style.display = 'block';
+        if (ph) ph.style.display = 'none';
+      }
+      // Show FPS indicator
+      const now = Date.now();
+      if (_lastFrameTs) {
+        const fps = (1000 / (now - _lastFrameTs)).toFixed(1);
+        const badge = document.getElementById('aiFpsBadge');
+        if (badge) badge.textContent = `${fps} FPS`;
+      }
+      _lastFrameTs = now;
     }
-    const video = document.getElementById('aiLiveVideo');
-    if (video) { video.src = ''; video.style.display = 'none'; }
-    const ph = document.getElementById('aiPlaceholder');
-    if (ph) ph.style.display = 'flex';
   }
 
-  function onStreamReady(cameraId) {
-    if (parseInt(cameraId) === activeCameraId) startHlsPlayer(parseInt(cameraId));
-  }
-
-  function onStreamStarting(cameraId) {
-    // Stream is starting — placeholder stays visible until stream_ready fires
-  }
-
-  /* ----------------------------------------------------------
-     Socket.io handlers
-  ---------------------------------------------------------- */
   function onPlatesSaved(plates) {
     if (!Array.isArray(plates)) return;
     const body = document.getElementById('aiLogBody');
@@ -220,8 +189,6 @@
     plates.forEach(p => frag.appendChild(buildPlateRow(p)));
     body.insertBefore(frag, body.firstChild);
     refreshStats();
-    // Flash detection chips in the overlay
-    showDetectionOverlay(plates);
   }
 
   function onLprStatus(s) {
@@ -229,31 +196,18 @@
     updateStatusBadge(s.status);
     currentStatus = s.status;
     updateToggleBtn();
+    if (s.status === 'stopped') {
+      // Hide live image when stopped
+      const img = document.getElementById('aiLiveImg');
+      const ph  = document.getElementById('aiPlaceholder');
+      if (img) img.style.display = 'none';
+      if (ph)  ph.style.display  = 'flex';
+      const badge = document.getElementById('aiFpsBadge');
+      if (badge) badge.textContent = '';
+    }
     if (s.status === 'error' && s.msg) {
       NVR.toast('error', 'LPR Błąd', s.msg.slice(0, 120));
     }
-  }
-
-  /* ----------------------------------------------------------
-     Detection overlay (shown briefly on video when plate found)
-  ---------------------------------------------------------- */
-  let overlayTimer = null;
-
-  function showDetectionOverlay(plates) {
-    const overlay = document.getElementById('aiDetOverlay');
-    if (!overlay) return;
-    clearTimeout(overlayTimer);
-    overlay.innerHTML = plates.map(p => {
-      const conf = Math.round((p.confidence || 0) * 100);
-      return `<div class="ai-det-chip">
-        <span class="ai-det-plate">${escHtml(p.plate_text)}</span>
-        <span class="ai-det-conf">${conf}%</span>
-      </div>`;
-    }).join('');
-    overlay.classList.add('visible');
-    overlayTimer = setTimeout(() => {
-      overlay.classList.remove('visible');
-    }, 4000);
   }
 
   /* ----------------------------------------------------------
@@ -266,12 +220,6 @@
       updateStatusBadge(st.status);
       updateToggleBtn();
       updateStats(st.stats);
-      // If already running, attach HLS stream immediately
-      if (st.cameraId && ['connecting','connected','running','reconnecting'].includes(st.status)) {
-        activeCameraId = st.cameraId;
-        NVR.socket.emit('watch_camera', st.cameraId);
-        startHlsPlayer(st.cameraId);
-      }
     } catch (_) {}
   }
 
@@ -328,11 +276,6 @@
         currentStatus = 'stopped';
         updateStatusBadge('stopped');
         updateToggleBtn();
-        stopHlsPlayer();
-        if (activeCameraId !== null) {
-          NVR.socket.emit('unwatch_camera', activeCameraId);
-          activeCameraId = null;
-        }
       } catch (e) { NVR.toast('error', 'Błąd', e.message); }
       return;
     }
@@ -350,11 +293,6 @@
       updateStatusBadge('initializing');
       updateToggleBtn();
       NVR.toast('info', 'LPR', 'Uruchamianie detekcji...');
-
-      // Start HLS stream immediately — hls.js will retry until manifest is ready
-      activeCameraId = parseInt(cameraId);
-      NVR.socket.emit('watch_camera', activeCameraId);
-      startHlsPlayer(activeCameraId);
     } catch (e) { NVR.toast('error', 'Błąd', e.message); }
   }
 
@@ -374,23 +312,18 @@
       const rows = await NVR.api.get(
         `/api/lpr/plates?limit=${PAGE_SIZE}&offset=${plateOffset}&search=${encodeURIComponent(search)}&date=${date}`
       );
-
       if (reset) body.innerHTML = '';
-
       if (!rows.length && reset) {
         body.innerHTML = '<div style="padding:24px;color:var(--text-dim);text-align:center;font-size:13px">Brak zapisanych tablic</div>';
         document.getElementById('aiLogFooter').style.display = 'none';
         return;
       }
-
       const frag = document.createDocumentFragment();
       rows.forEach(p => frag.appendChild(buildPlateRow(p)));
       body.appendChild(frag);
-
       plateOffset += rows.length;
       const footer = document.getElementById('aiLogFooter');
       if (footer) footer.style.display = rows.length < PAGE_SIZE ? 'none' : 'flex';
-
       await refreshStats();
     } catch (e) {
       body.innerHTML = `<div style="padding:24px;color:var(--danger);font-size:13px">Błąd: ${escHtml(e.message)}</div>`;
@@ -403,7 +336,6 @@
     const dt      = new Date(p.detected_at);
     const dateStr = dt.toLocaleDateString('pl-PL');
     const timeStr = dt.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
     const row = document.createElement('div');
     row.className = 'plate-row';
     row.innerHTML = `
@@ -428,9 +360,6 @@
     } catch (e) { NVR.toast('error', 'Błąd', e.message); }
   }
 
-  /* ----------------------------------------------------------
-     Helpers
-  ---------------------------------------------------------- */
   function escHtml(str) {
     return String(str || '').replace(/[&<>"']/g, c =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

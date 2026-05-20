@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 NVR Pro — License Plate Recognition using fast-alpr.
-Uses YOLOv9 for plate detection + european ViT model for OCR.
-Much more accurate than general-purpose EasyOCR.
+YOLOv9 plate detection + European ViT OCR model.
+Sends annotated JPEG frames with bounding boxes back to Node.js via stdout.
 Usage: python3 detector.py <rtsp_url>
 """
 import cv2
+import base64
 import json
 import sys
 import time
@@ -13,6 +14,7 @@ import re
 import os
 import threading
 import queue
+import numpy as np
 
 os.environ.setdefault('ALPR_MODELS_DIR', os.path.expanduser('~/.fast_alpr'))
 
@@ -33,7 +35,7 @@ except Exception as e:
     sys.exit(1)
 
 
-# ── Plate validation (post-filter) ───────────────────────────
+# ── Plate validation ──────────────────────────────────────────
 _PLATE_RE = re.compile(r'^[A-Z]{2,3}[A-Z0-9]{4,5}$')
 
 def is_valid_plate(t: str) -> bool:
@@ -49,12 +51,53 @@ def is_valid_plate(t: str) -> bool:
     return True
 
 
-def clean_plate(text: str) -> str:
-    """Strip non-alphanumeric and uppercase."""
-    return re.sub(r'[^A-Z0-9]', '', text.upper())
+def annotate_frame(frame, results, h):
+    """Draw ALPR bounding boxes and plate text onto frame (BGR)."""
+    y_min = int(h * 0.04)
+    y_max = int(h * 0.88)
+    ann = frame.copy()
+
+    for result in results:
+        bb   = result.detection.bounding_box
+        x1, y1, x2, y2 = int(bb.x1), int(bb.y1), int(bb.x2), int(bb.y2)
+
+        # Skip watermark zones
+        if y1 < y_min or y2 > y_max:
+            continue
+
+        ocr_text = result.ocr.text if result.ocr else ''
+        ocr_conf = float(result.ocr.confidence) if result.ocr else 0.0
+        plate    = re.sub(r'[^A-Z0-9]', '', ocr_text.upper())
+
+        # Green box for valid plates, yellow for detected but not validated
+        color = (0, 220, 0) if (plate and is_valid_plate(plate)) else (0, 200, 220)
+
+        cv2.rectangle(ann, (x1, y1), (x2, y2), color, 2)
+
+        if ocr_text:
+            label  = f"{plate or ocr_text}  {ocr_conf:.0%}"
+            fs     = 0.65
+            thick  = 2
+            (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, fs, thick)
+            ly = max(y1 - 6, th + 6)
+            cv2.rectangle(ann, (x1, ly - th - bl - 4), (x1 + tw + 8, ly + 2), (0, 0, 0), -1)
+            cv2.rectangle(ann, (x1, ly - th - bl - 4), (x1 + tw + 8, ly + 2), color, 1)
+            cv2.putText(ann, label, (x1 + 4, ly - bl),
+                        cv2.FONT_HERSHEY_SIMPLEX, fs, color, thick, cv2.LINE_AA)
+
+    # Timestamp watermark
+    ts_str = time.strftime('%Y-%m-%d %H:%M:%S')
+    cv2.putText(ann, f'NVR AI  {ts_str}', (8, ann.shape[0] - 8),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
+    return ann
 
 
-# ── Thread 1: RTSP frame reader ───────────────────────────────
+def encode_frame(frame):
+    _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
+    return base64.b64encode(buf.tobytes()).decode('ascii')
+
+
+# ── Thread 1: RTSP reader ─────────────────────────────────────
 def reader_thread(rtsp_url, frame_queue, stop_event):
     cap = None
     consecutive_fail = 0
@@ -88,7 +131,6 @@ def reader_thread(rtsp_url, frame_queue, stop_event):
             consecutive_fail = 0
             connect_attempts = 0
 
-        # Always drain buffer — grab without decode, then decode latest
         cap.grab()
         ret, frame = cap.read()
 
@@ -103,13 +145,11 @@ def reader_thread(rtsp_url, frame_queue, stop_event):
 
         consecutive_fail = 0
 
-        # Resize to 1280px wide max — YOLO works well at this resolution
         h, w = frame.shape[:2]
         if w > 1280:
             scale = 1280 / w
             frame = cv2.resize(frame, (1280, int(h * scale)), interpolation=cv2.INTER_AREA)
 
-        # Push frame to OCR queue; drop if ALPR thread is busy
         try:
             frame_queue.put_nowait((frame, time.time()))
         except queue.Full:
@@ -119,13 +159,13 @@ def reader_thread(rtsp_url, frame_queue, stop_event):
         cap.release()
 
 
-# ── Main / Thread 2: ALPR processor ──────────────────────────
+# ── Main / Thread 2: ALPR + frame annotator ──────────────────
 def main():
     if len(sys.argv) < 2:
         _emit({'status': 'error', 'msg': 'Usage: detector.py <rtsp_url>'})
         sys.exit(1)
 
-    rtsp_url   = sys.argv[1]
+    rtsp_url    = sys.argv[1]
     frame_queue = queue.Queue(maxsize=2)
     stop_event  = threading.Event()
 
@@ -133,70 +173,63 @@ def main():
                          args=(rtsp_url, frame_queue, stop_event), daemon=True)
     t.start()
 
-    last_heartbeat = 0.0
-    HEARTBEAT_SEC  = 5.0
+    last_frame_emit = 0.0
+    FRAME_INTERVAL  = 0.5   # max 2 FPS for live view (JPEG over WebSocket)
+    HEARTBEAT_SEC   = 5.0
 
     while not stop_event.is_set():
         try:
             frame, ts = frame_queue.get(timeout=HEARTBEAT_SEC)
         except queue.Empty:
             _emit({'status': 'running', 'ts': time.time(), 'detections': []})
-            last_heartbeat = time.time()
+            last_frame_emit = time.time()
             continue
 
         h, w = frame.shape[:2]
-        # Exclude watermark zones at top (4%) and bottom (12%)
         y_min = int(h * 0.04)
         y_max = int(h * 0.88)
 
         try:
-            # fast-alpr expects RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results   = alpr.predict(frame_rgb)
         except Exception as exc:
             _emit({'status': 'error', 'msg': str(exc)})
             continue
 
+        # Collect valid detections
         detections = []
         seen = set()
-
         for result in results:
-            if result.ocr is None:
-                continue
-
-            bb   = result.detection.bounding_box
-            conf = float(result.ocr.confidence)
-
-            # Skip watermark zones
+            bb = result.detection.bounding_box
             if bb.y1 < y_min or bb.y2 > y_max:
                 continue
-
-            if conf < 0.45:
+            if result.ocr is None or float(result.ocr.confidence) < 0.40:
                 continue
-
-            text = clean_plate(result.ocr.text)
-            if not text or text in seen:
+            plate = re.sub(r'[^A-Z0-9]', '', result.ocr.text.upper())
+            if not plate or plate in seen:
                 continue
-
-            # Validate as Polish plate; skip obvious garbage
-            if not is_valid_plate(text):
+            if not is_valid_plate(plate):
                 continue
-
-            seen.add(text)
+            seen.add(plate)
             detections.append({
-                'text':       text,
-                'confidence': round(conf, 3),
+                'text':       plate,
+                'confidence': round(float(result.ocr.confidence), 3),
                 'rect':       [int(bb.x1), int(bb.y1),
                                int(bb.x2 - bb.x1), int(bb.y2 - bb.y1)]
             })
 
         now = time.time()
-        if detections:
-            _emit({'status': 'running', 'ts': ts, 'detections': detections})
-            last_heartbeat = now
-        elif now - last_heartbeat >= HEARTBEAT_SEC:
-            _emit({'status': 'running', 'ts': now, 'detections': []})
-            last_heartbeat = now
+        # Emit annotated frame at controlled rate or immediately when plates found
+        if detections or (now - last_frame_emit >= FRAME_INTERVAL):
+            ann   = annotate_frame(frame, results, h)
+            b64   = encode_frame(ann)
+            _emit({
+                'status':     'running',
+                'ts':         ts,
+                'detections': detections,
+                'frame':      b64
+            })
+            last_frame_emit = now
 
 
 if __name__ == '__main__':
